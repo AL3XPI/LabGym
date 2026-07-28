@@ -1,0 +1,21 @@
+,behind the wheel,body grooming fv,body grooming sv,chewing fv,chewing sv,coming down,face grooming fv,face grooming sv,foraging fv,foraging sv,rearing up,resting on the wheel,running on the wheel,sniffing fv,sniffing sv,standing,turning front,turning side,unknown bv,walking
+behind the wheel,164,0,0,0,0,1,0,0,0,5,1,1,0,0,1,0,0,0,2,2
+body grooming fv,0,120,6,8,0,0,121,4,99,1,0,0,3,5,0,0,0,0,0,0
+body grooming sv,0,4,141,5,2,0,8,39,45,2,0,0,1,1,0,1,0,2,3,0
+chewing fv,0,1,2,96,6,0,8,1,6,1,0,0,0,2,0,0,0,0,0,0
+chewing sv,0,0,2,0,172,0,0,2,0,19,0,0,0,0,2,0,0,0,3,0
+coming down,0,0,0,0,0,367,0,0,0,0,3,11,2,0,1,1,1,0,0,1
+face grooming fv,0,3,0,0,0,0,144,1,13,0,0,0,0,2,0,1,0,0,0,0
+face grooming sv,0,1,56,30,3,0,1,78,1,3,0,0,0,2,0,0,0,0,1,0
+foraging fv,0,2,1,4,1,0,1,0,347,5,0,0,0,0,1,1,3,2,0,0
+foraging sv,0,0,0,0,3,0,0,1,2,492,0,0,0,0,0,1,0,0,1,0
+rearing up,0,0,0,0,0,2,2,0,1,0,407,7,2,2,3,2,0,2,0,0
+resting on the wheel,1,0,0,0,0,2,0,0,0,0,1,308,10,1,1,0,0,1,1,5
+running on the wheel,0,0,0,0,0,0,0,0,0,0,0,4,419,0,0,0,0,0,0,1
+sniffing fv,0,1,1,1,0,1,5,2,1,1,2,0,2,85,5,5,1,3,0,0
+sniffing sv,0,0,0,0,0,2,1,0,0,13,4,30,3,1,204,8,0,1,1,1
+standing,0,0,0,0,0,9,0,0,0,1,6,44,11,0,2,305,0,3,0,0
+turning front,0,0,0,0,0,0,0,0,2,6,0,1,0,1,0,0,65,3,0,1
+turning side,0,0,2,0,1,2,0,0,2,15,1,2,8,1,3,2,4,198,11,5
+unknown bv,0,1,3,0,1,0,0,0,3,5,0,0,0,0,0,1,0,1,377,0
+walking,0,0,0,0,0,0,0,0,0,5,2,0,4,0,0,0,1,4,0,224
