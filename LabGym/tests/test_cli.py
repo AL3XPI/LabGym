@@ -1,122 +1,428 @@
-import argparse
+import os
 import sys
 import pytest
 import yaml
-import numpy as np
 
-from LabGym.cli import str2bool, merge_configs, get_centroid, parse_pair
+from LabGym.cli import (
+    build_parser,
+    resolve_config,
+    CLIConfigError,
+    main,
+    TRAIN_CATEGORIZER_DEFAULTS,
+    ALLOWED_TRAIN_CATEGORIZER_KEYS,
+    REQUIRED_TRAIN_CATEGORIZER_KEYS,
+    TRAIN_DETECTOR_DEFAULTS,
+    ALLOWED_TRAIN_DETECTOR_KEYS,
+    REQUIRED_TRAIN_DETECTOR_KEYS,
+    TEST_CATEGORIZER_DEFAULTS,
+    ALLOWED_TEST_CATEGORIZER_KEYS,
+    REQUIRED_TEST_CATEGORIZER_KEYS,
+    TEST_DETECTOR_DEFAULTS,
+    ALLOWED_TEST_DETECTOR_KEYS,
+    REQUIRED_TEST_DETECTOR_KEYS,
+    INFER_DEFAULTS,
+    ALLOWED_INFER_KEYS,
+    REQUIRED_INFER_KEYS,
+)
 
-def test_str2bool():
-    # Test typical true values
-    assert str2bool("true") is True
-    assert str2bool("T") is True
-    assert str2bool("1") is True
-    assert str2bool("yes") is True
-    assert str2bool(True) is True
-    
-    # Test typical false values
-    assert str2bool("false") is False
-    assert str2bool("F") is False
-    assert str2bool("0") is False
-    assert str2bool("no") is False
-    assert str2bool(False) is False
-    
-    # Test error cases
-    with pytest.raises(argparse.ArgumentTypeError):
-        str2bool("not-a-bool")
 
-def test_parse_pair():
-    assert parse_pair("BehaviorA -> BehaviorB") == ("BehaviorA", "BehaviorB")
-    assert parse_pair("BehaviorA -> BehaviorB (5 errors)") == ("BehaviorA", "BehaviorB")
-    assert parse_pair("InvalidPair") is None
+def test_command_routing_train_categorizer():
+    parser = build_parser()
+    args = parser.parse_args([
+        "train", "categorizer",
+        "--data-path", "/path/to/data",
+        "--model-path", "/path/to/model"
+    ])
+    assert args.action == "train"
+    assert args.target == "categorizer"
+    assert args.data_path == "/path/to/data"
+    assert args.model_path == "/path/to/model"
 
-def test_merge_configs(tmp_path):
-    # Setup mock CLI args
-    class MockArgs:
-        def __init__(self):
-            self.config = None
-            self.dim_conv = None
-            self.channel = None
-            self.background_free = None
-            
-    cli_args = MockArgs()
-    cli_args.dim_conv = 128
-    cli_args.background_free = True
-    
-    defaults = {
-        'dim_conv': 64,
+
+def test_command_routing_train_detector():
+    parser = build_parser()
+    args = parser.parse_args([
+        "train", "detector",
+        "--path-to-annotation", "annot.json",
+        "--path-to-trainingimages", "imgs/",
+        "--model-path", "det_model/"
+    ])
+    assert args.action == "train"
+    assert args.target == "detector"
+    assert args.path_to_annotation == "annot.json"
+    assert args.path_to_trainingimages == "imgs/"
+    assert args.model_path == "det_model/"
+
+
+def test_command_routing_test_categorizer():
+    parser = build_parser()
+    args = parser.parse_args([
+        "test", "categorizer",
+        "--groundtruth-path", "gt/",
+        "--model-path", "cat_model/"
+    ])
+    assert args.action == "test"
+    assert args.target == "categorizer"
+    assert args.groundtruth_path == "gt/"
+    assert args.model_path == "cat_model/"
+
+
+def test_command_routing_test_detector():
+    parser = build_parser()
+    args = parser.parse_args([
+        "test", "detector",
+        "--path-to-annotation", "test_annot.json",
+        "--path-to-testingimages", "test_imgs/",
+        "--model-path", "det_model/"
+    ])
+    assert args.action == "test"
+    assert args.target == "detector"
+    assert args.path_to_annotation == "test_annot.json"
+    assert args.path_to_testingimages == "test_imgs/"
+    assert args.model_path == "det_model/"
+
+
+def test_command_routing_infer():
+    parser = build_parser()
+    args = parser.parse_args([
+        "infer",
+        "--path-to-videos", "vid1.mp4", "vid2.mp4",
+        "--result-path", "out/"
+    ])
+    assert args.action == "infer"
+    assert args.path_to_videos == ["vid1.mp4", "vid2.mp4"]
+    assert args.result_path == "out/"
+
+
+def test_missing_target_fails():
+    exit_code = main(["train"])
+    assert exit_code == 2
+
+    exit_code_test = main(["test"])
+    assert exit_code_test == 2
+
+
+def test_precedence_defaults_only():
+    cli_args = {
+        'data_path': '/my/data',
+        'model_path': '/my/model',
+    }
+    resolved = resolve_config(
+        command_name="labgym train categorizer",
+        defaults=TRAIN_CATEGORIZER_DEFAULTS,
+        allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+        required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+        config_path=None,
+        cli_args_dict=cli_args
+    )
+    assert resolved['dim_conv'] == 64
+    assert resolved['channel'] == 1
+    assert resolved['level_conv'] == 2
+    assert resolved['background_free'] is True
+    assert resolved['data_path'] == '/my/data'
+    assert resolved['model_path'] == '/my/model'
+
+
+def test_precedence_yaml_overrides_defaults(tmp_path):
+    config_file = tmp_path / "train_cat.yaml"
+    yaml_content = {
+        'data_path': '/yaml/data',
+        'model_path': '/yaml/model',
+        'dim_conv': 128,
         'channel': 3,
         'background_free': False,
     }
-    
-    # Merge without config file
-    merged = merge_configs(cli_args, defaults)
-    assert merged['dim_conv'] == 128  # overridden by CLI
-    assert merged['channel'] == 3     # fallback to default
-    assert merged['background_free'] is True # overridden by CLI
-    
-    # Merge with YAML config file
-    config_file = tmp_path / "config.yaml"
-    config_data = {
-        'dim_conv': 32,
-        'channel': 1,
+    with open(config_file, 'w') as f:
+        yaml.dump(yaml_content, f)
+
+    cli_args = {}
+    resolved = resolve_config(
+        command_name="labgym train categorizer",
+        defaults=TRAIN_CATEGORIZER_DEFAULTS,
+        allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+        required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+        config_path=str(config_file),
+        cli_args_dict=cli_args
+    )
+
+    assert resolved['dim_conv'] == 128
+    assert resolved['channel'] == 3
+    assert resolved['background_free'] is False
+    assert resolved['data_path'] == '/yaml/data'
+    assert resolved['dim_tconv'] == 32
+    assert resolved['time_step'] == 15
+
+
+def test_precedence_inline_overrides_yaml(tmp_path):
+    config_file = tmp_path / "train_cat.yaml"
+    yaml_content = {
+        'data_path': '/yaml/data',
+        'model_path': '/yaml/model',
+        'dim_conv': 128,
+        'channel': 3,
         'background_free': False,
     }
     with open(config_file, 'w') as f:
-        yaml.dump(config_data, f)
-        
-    cli_args.config = str(config_file)
-    cli_args.dim_conv = None  # CLI does not override this one
-    cli_args.background_free = True # CLI overrides this one
-    
-    merged_with_yaml = merge_configs(cli_args, defaults)
-    assert merged_with_yaml['dim_conv'] == 32  # from YAML
-    assert merged_with_yaml['channel'] == 1     # from YAML
-    assert merged_with_yaml['background_free'] is True # from CLI overriding YAML
+        yaml.dump(yaml_content, f)
 
-def test_get_centroid():
-    embedding_map = {
-        "file1.avi": np.array([1.0, 0.0, 0.0]),
-        "file2.avi": np.array([0.9, 0.1, 0.0]),
-        "file3.avi": np.array([0.0, 1.0, 0.0])
+    cli_args = {
+        'dim_conv': 256,
+        'background_free': True,
     }
-    
-    # Test centroid calculation
-    file_list = ["file1.avi", "file2.avi", "file3.avi"]
-    centroid = get_centroid(embedding_map, file_list)
-    
-    # Mean of embs is [1.9/3, 1.1/3, 0.0] = [0.633, 0.366, 0.0]
-    # Cosine similarities to mean:
-    # file1: dot([1,0,0], mean) = 0.633. Norm: 1. Sim: 0.633
-    # file2: dot([0.9, 0.1, 0.0], mean) = 0.9*0.633 + 0.1*0.366 = 0.57 + 0.036 = 0.606. Norm: sqrt(0.81+0.01) = 0.905. Sim: 0.606/0.905 = 0.67
-    # file3: dot([0,1,0], mean) = 0.366. Norm: 1. Sim: 0.366
-    # file2.avi should be the centroid
-    assert centroid == "file2.avi"
-    
-    # Test with single file
-    assert get_centroid(embedding_map, ["file3.avi"]) == "file3.avi"
-    
-    # Test with empty file list
-    assert get_centroid(embedding_map, []) is None
+    resolved = resolve_config(
+        command_name="labgym train categorizer",
+        defaults=TRAIN_CATEGORIZER_DEFAULTS,
+        allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+        required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+        config_path=str(config_file),
+        cli_args_dict=cli_args
+    )
 
-def test_merge_detector_configs():
-    class MockArgs:
-        def __init__(self):
-            self.config = None
-            self.path_to_annotation = None
-            self.path_to_trainingimages = None
-            self.iteration_num = 500
-            self.inference_size = None
-            
-    cli_args = MockArgs()
-    defaults = {
-        'path_to_annotation': None,
-        'path_to_trainingimages': None,
-        'iteration_num': 200,
-        'inference_size': 480,
+    assert resolved['dim_conv'] == 256
+    assert resolved['background_free'] is True
+    assert resolved['channel'] == 3
+    assert resolved['data_path'] == '/yaml/data'
+
+
+def test_absent_inline_flags_never_overwrite_yaml(tmp_path):
+    config_file = tmp_path / "infer_job.yaml"
+    yaml_content = {
+        'path_to_videos': ['/yaml/vids'],
+        'result_path': '/yaml/results',
+        'use_detector': True,
+        'delta': 500.0,
     }
-    
-    merged = merge_configs(cli_args, defaults)
-    assert merged['iteration_num'] == 500
-    assert merged['inference_size'] == 480
+    with open(config_file, 'w') as f:
+        yaml.dump(yaml_content, f)
 
+    cli_args = {
+        'use_detector': None,
+        'delta': None,
+        'path_to_videos': None,
+        'result_path': None,
+    }
+    resolved = resolve_config(
+        command_name="labgym infer",
+        defaults=INFER_DEFAULTS,
+        allowed_keys=ALLOWED_INFER_KEYS,
+        required_keys=REQUIRED_INFER_KEYS,
+        config_path=str(config_file),
+        cli_args_dict=cli_args
+    )
+
+    assert resolved['use_detector'] is True
+    assert resolved['delta'] == 500.0
+    assert resolved['result_path'] == '/yaml/results'
+
+
+def test_paired_boolean_flags_positive():
+    parser = build_parser()
+    args = parser.parse_args([
+        "infer",
+        "--path-to-videos", "vid.mp4",
+        "--result-path", "out/",
+        "--use-detector"
+    ])
+    assert args.use_detector is True
+
+
+def test_paired_boolean_flags_negative():
+    parser = build_parser()
+    args = parser.parse_args([
+        "infer",
+        "--path-to-videos", "vid.mp4",
+        "--result-path", "out/",
+        "--no-use-detector"
+    ])
+    assert args.use_detector is False
+
+
+def test_paired_boolean_flags_unspecified_defaults_to_none():
+    parser = build_parser()
+    args = parser.parse_args([
+        "infer",
+        "--path-to-videos", "vid.mp4",
+        "--result-path", "out/"
+    ])
+    assert args.use_detector is None
+
+
+def test_paired_boolean_flag_overrides_yaml_false_with_true(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    with open(cfg, 'w') as f:
+        yaml.dump({'path_to_videos': 'vid.mp4', 'result_path': 'out/', 'use_detector': False}, f)
+
+    resolved = resolve_config(
+        command_name="labgym infer",
+        defaults=INFER_DEFAULTS,
+        allowed_keys=ALLOWED_INFER_KEYS,
+        required_keys=REQUIRED_INFER_KEYS,
+        config_path=str(cfg),
+        cli_args_dict={'use_detector': True}
+    )
+    assert resolved['use_detector'] is True
+
+
+def test_paired_boolean_flag_overrides_yaml_true_with_false(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    with open(cfg, 'w') as f:
+        yaml.dump({'path_to_videos': 'vid.mp4', 'result_path': 'out/', 'use_detector': True}, f)
+
+    resolved = resolve_config(
+        command_name="labgym infer",
+        defaults=INFER_DEFAULTS,
+        allowed_keys=ALLOWED_INFER_KEYS,
+        required_keys=REQUIRED_INFER_KEYS,
+        config_path=str(cfg),
+        cli_args_dict={'use_detector': False}
+    )
+    assert resolved['use_detector'] is False
+
+
+def test_missing_config_file_raises_error():
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym train categorizer",
+            defaults=TRAIN_CATEGORIZER_DEFAULTS,
+            allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+            required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+            config_path="/nonexistent/path/to/missing_config.yaml",
+            cli_args_dict={}
+        )
+    assert "Specified configuration file not found" in str(exc_info.value)
+
+
+def test_unknown_yaml_key_raises_error(tmp_path):
+    bad_cfg = tmp_path / "bad.yaml"
+    with open(bad_cfg, 'w') as f:
+        yaml.dump({
+            'data_path': '/data',
+            'model_path': '/model',
+            'unknown_bad_key': 123
+        }, f)
+
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym train categorizer",
+            defaults=TRAIN_CATEGORIZER_DEFAULTS,
+            allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+            required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+            config_path=str(bad_cfg),
+            cli_args_dict={}
+        )
+    assert "Unknown configuration key(s)" in str(exc_info.value)
+    assert "unknown_bad_key" in str(exc_info.value)
+
+
+def test_missing_required_keys_raises_error():
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym train categorizer",
+            defaults=TRAIN_CATEGORIZER_DEFAULTS,
+            allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+            required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+            config_path=None,
+            cli_args_dict={'data_path': '/some/data'}
+        )
+    assert "Missing required parameter(s)" in str(exc_info.value)
+    assert "model_path" in str(exc_info.value)
+
+
+def test_invalid_integer_bounds_raises_error():
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym train detector",
+            defaults=TRAIN_DETECTOR_DEFAULTS,
+            allowed_keys=ALLOWED_TRAIN_DETECTOR_KEYS,
+            required_keys=REQUIRED_TRAIN_DETECTOR_KEYS,
+            config_path=None,
+            cli_args_dict={
+                'path_to_annotation': 'a.json',
+                'path_to_trainingimages': 'imgs/',
+                'model_path': 'det/',
+                'iteration_num': -100
+            }
+        )
+    assert "Parameter 'iteration_num' for 'labgym train detector' must be a positive integer" in str(exc_info.value)
+
+
+def test_invalid_channel_raises_error():
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym train categorizer",
+            defaults=TRAIN_CATEGORIZER_DEFAULTS,
+            allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+            required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+            config_path=None,
+            cli_args_dict={
+                'data_path': '/data',
+                'model_path': '/model',
+                'channel': 2
+            }
+        )
+    assert "Parameter 'channel' must be 1 or 3" in str(exc_info.value)
+
+
+def test_invalid_network_type_raises_error():
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym train categorizer",
+            defaults=TRAIN_CATEGORIZER_DEFAULTS,
+            allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+            required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+            config_path=None,
+            cli_args_dict={
+                'data_path': '/data',
+                'model_path': '/model',
+                'network_type': 'nonexistent_network'
+            }
+        )
+    assert "Invalid network_type 'nonexistent_network'" in str(exc_info.value)
+
+
+def test_detector_training_does_not_require_categorizer_data():
+    cli_args = {
+        'path_to_annotation': 'annot.json',
+        'path_to_trainingimages': 'images/',
+        'model_path': 'models/detector',
+    }
+    resolved = resolve_config(
+        command_name="labgym train detector",
+        defaults=TRAIN_DETECTOR_DEFAULTS,
+        allowed_keys=ALLOWED_TRAIN_DETECTOR_KEYS,
+        required_keys=REQUIRED_TRAIN_DETECTOR_KEYS,
+        config_path=None,
+        cli_args_dict=cli_args
+    )
+    assert resolved['path_to_annotation'] == 'annot.json'
+    assert resolved['iteration_num'] == 200
+    assert 'data_path' not in resolved
+
+
+def test_user_path_expansion():
+    cli_args = {
+        'data_path': '~/my_dataset',
+        'model_path': '~/my_model',
+    }
+    resolved = resolve_config(
+        command_name="labgym train categorizer",
+        defaults=TRAIN_CATEGORIZER_DEFAULTS,
+        allowed_keys=ALLOWED_TRAIN_CATEGORIZER_KEYS,
+        required_keys=REQUIRED_TRAIN_CATEGORIZER_KEYS,
+        config_path=None,
+        cli_args_dict=cli_args
+    )
+    expected_home = os.path.expanduser('~')
+    assert resolved['data_path'].startswith(expected_home)
+    assert resolved['model_path'].startswith(expected_home)
+    assert not resolved['data_path'].startswith('~')
+
+
+def test_cli_main_missing_config_returns_non_zero():
+    exit_code = main(["train", "categorizer", "-c", "missing_file_does_not_exist.yaml"])
+    assert exit_code == 2
+
+
+def test_cli_main_invalid_args_returns_code_2():
+    exit_code = main(["infer", "--unknown-flag-1234"])
+    assert exit_code == 2
