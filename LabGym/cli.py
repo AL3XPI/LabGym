@@ -82,21 +82,15 @@ INFER_DEFAULTS = {
     'decode_extraction': False,
     'ex_start': 0,
     'ex_end': None,
-    'animal_vs_bg': 0,
     'stable_illumination': True,
     'ID_colors': [(255, 255, 255)],
     'parameter_to_analyze': [],
     'uncertain': 0.0,
     'min_length': None,
     'show_legend': True,
-    'background_free': True,
-    'black_background': True,
     'normalize_distance': True,
-    'social_distance': 0.0,
-    'color_costar': False,
     'correct_ID': False,
     'specific_behaviors': {},
-    'behavior_mode': 0,
 }
 REQUIRED_INFER_KEYS = {'path_to_videos', 'result_path'}
 ALLOWED_INFER_KEYS = (
@@ -125,67 +119,113 @@ def parse_json_or_val(v):
 
 
 def validate_types_and_ranges(command_name, config):
+    for path_key in PATH_KEYS:
+        if path_key in config and config[path_key] is not None:
+            val = config[path_key]
+            if isinstance(val, bool) or not isinstance(val, str):
+                raise CLIConfigError(
+                    f"Parameter '{path_key}' must be a string path (got {type(val).__name__}: {val!r})."
+                )
+
+    if 'path_to_videos' in config and config['path_to_videos'] is not None:
+        val = config['path_to_videos']
+        if isinstance(val, bool) or not isinstance(val, list) or len(val) == 0:
+            raise CLIConfigError(
+                f"Parameter 'path_to_videos' must be a non-empty list of video paths (got {val!r})."
+            )
+        for item in val:
+            if isinstance(item, bool) or not isinstance(item, str):
+                raise CLIConfigError(
+                    f"Items in 'path_to_videos' must be string paths (got {item!r})."
+                )
+
     pos_int_keys = [
-        'dim_conv', 'dim_tconv', 'iteration_num', 'inference_size', 'detector_batch'
+        'dim_conv', 'dim_tconv', 'iteration_num', 'inference_size', 'detector_batch',
+        'framewidth', 'min_length'
     ]
     for key in pos_int_keys:
         if key in config and config[key] is not None:
             val = config[key]
-            if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
+            if isinstance(val, bool) or not isinstance(val, int) or val <= 0:
                 raise CLIConfigError(
                     f"Parameter '{key}' for '{command_name}' must be a positive integer (got {val!r})."
                 )
 
-    non_neg_int_keys = ['time_step', 'ex_start', 'animal_vs_bg']
+    non_neg_int_keys = ['time_step', 'ex_start', 'ex_end']
     for key in non_neg_int_keys:
         if key in config and config[key] is not None:
             val = config[key]
-            if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
                 raise CLIConfigError(
                     f"Parameter '{key}' for '{command_name}' must be a non-negative integer (got {val!r})."
                 )
 
-    if 'channel' in config and config['channel'] is not None:
-        if config['channel'] not in (1, 3):
+    if config.get('ex_start') is not None and config.get('ex_end') is not None:
+        if config['ex_end'] < config['ex_start']:
             raise CLIConfigError(
-                f"Parameter 'channel' must be 1 or 3 (got {config['channel']!r})."
+                f"Parameter 'ex_end' ({config['ex_end']}) must be greater than or equal to 'ex_start' ({config['ex_start']})."
+            )
+
+    if 'channel' in config and config['channel'] is not None:
+        val = config['channel']
+        if isinstance(val, bool) or not isinstance(val, int) or val not in (1, 3):
+            raise CLIConfigError(
+                f"Parameter 'channel' must be 1 or 3 (got {val!r})."
             )
 
     for level_key in ['level_conv', 'level_tconv']:
         if level_key in config and config[level_key] is not None:
             val = config[level_key]
-            if not isinstance(val, int) or isinstance(val, bool) or not (1 <= val <= 5):
+            if isinstance(val, bool) or not isinstance(val, int) or not (1 <= val <= 5):
                 raise CLIConfigError(
                     f"Parameter '{level_key}' must be an integer between 1 and 5 (got {val!r})."
                 )
 
     if 'network_type' in config and config['network_type'] is not None:
+        val = config['network_type']
         valid_nets = {'combnet', 'pattern_recognizer', 'animation_analyzer', 'combined_network'}
-        if config['network_type'] not in valid_nets:
+        if isinstance(val, bool) or not isinstance(val, str) or val not in valid_nets:
             raise CLIConfigError(
-                f"Invalid network_type '{config['network_type']}'. Choose from: {sorted(valid_nets)}."
+                f"Invalid network_type '{val}'. Choose from: {sorted(valid_nets)}."
             )
 
     if 'behavior_mode' in config and config['behavior_mode'] is not None:
         val = config['behavior_mode']
-        if not isinstance(val, int) or isinstance(val, bool) or not (0 <= val <= 3):
+        if isinstance(val, bool) or not isinstance(val, int) or not (0 <= val <= 3):
             raise CLIConfigError(
                 f"Parameter 'behavior_mode' must be an integer between 0 and 3 (got {val!r})."
             )
 
-    float_keys = ['std', 'social_distance', 't', 'duration', 'delta', 'detection_threshold', 'uncertain']
+    list_str_keys = [
+        'aug_methods', 'animal_kinds', 'animal_to_include',
+        'behavior_to_include', 'parameter_to_analyze'
+    ]
+    for key in list_str_keys:
+        if key in config and config[key] is not None:
+            val = config[key]
+            if isinstance(val, bool) or not isinstance(val, list):
+                raise CLIConfigError(
+                    f"Parameter '{key}' for '{command_name}' must be a list of strings (got {type(val).__name__}: {val!r})."
+                )
+            for item in val:
+                if isinstance(item, bool) or not isinstance(item, str):
+                    raise CLIConfigError(
+                        f"Items in '{key}' for '{command_name}' must be strings (got {item!r})."
+                    )
+
+    float_keys = ['std', 'social_distance', 't', 'duration', 'delta']
     for key in float_keys:
         if key in config and config[key] is not None:
             val = config[key]
-            if not isinstance(val, (int, float)) or isinstance(val, bool) or val < 0:
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or val < 0:
                 raise CLIConfigError(
                     f"Parameter '{key}' must be a non-negative float (got {val!r})."
                 )
 
     for thresh_key in ['detection_threshold', 'uncertain']:
         if thresh_key in config and config[thresh_key] is not None:
-            val = float(config[thresh_key])
-            if not (0.0 <= val <= 1.0):
+            val = config[thresh_key]
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or not (0.0 <= float(val) <= 1.0):
                 raise CLIConfigError(
                     f"Parameter '{thresh_key}' must be between 0.0 and 1.0 (got {val!r})."
                 )
@@ -201,8 +241,29 @@ def validate_types_and_ranges(command_name, config):
             val = config[key]
             if not isinstance(val, bool):
                 raise CLIConfigError(
-                    f"Parameter '{key}' must be a boolean True/False (got {val!r})."
+                    f"Parameter '{key}' must be a boolean True/False (got {type(val).__name__}: {val!r})."
                 )
+
+    if 'ID_colors' in config and config['ID_colors'] is not None:
+        val = config['ID_colors']
+        if isinstance(val, bool) or not isinstance(val, (list, tuple)):
+            raise CLIConfigError(
+                f"Parameter 'ID_colors' must be a list of color entries (got {type(val).__name__}: {val!r})."
+            )
+
+    if 'specific_behaviors' in config and config['specific_behaviors'] is not None:
+        val = config['specific_behaviors']
+        if isinstance(val, bool) or not isinstance(val, dict):
+            raise CLIConfigError(
+                f"Parameter 'specific_behaviors' must be a dictionary (got {type(val).__name__}: {val!r})."
+            )
+
+    if 'animal_number' in config and config['animal_number'] is not None:
+        val = config['animal_number']
+        if isinstance(val, bool) or (isinstance(val, int) and val <= 0):
+            raise CLIConfigError(
+                f"Parameter 'animal_number' must be a positive integer, dictionary, or string (got {val!r})."
+            )
 
 
 def resolve_config(command_name, defaults, allowed_keys, required_keys, config_path, cli_args_dict):
@@ -243,18 +304,25 @@ def resolve_config(command_name, defaults, allowed_keys, required_keys, config_p
         resolved['ID_colors'] = resolved.pop('id_colors')
 
     for pk in PATH_KEYS:
-        if pk in resolved and isinstance(resolved[pk], str):
+        if pk in resolved and isinstance(resolved[pk], str) and not isinstance(resolved[pk], bool):
             resolved[pk] = os.path.expanduser(resolved[pk])
 
     if 'path_to_videos' in resolved and resolved['path_to_videos'] is not None:
         val = resolved['path_to_videos']
-        if isinstance(val, str):
+        if isinstance(val, str) and not isinstance(val, bool):
             resolved['path_to_videos'] = [os.path.expanduser(val)]
         elif isinstance(val, list):
             resolved['path_to_videos'] = [
-                os.path.expanduser(item) if isinstance(item, str) else item
+                os.path.expanduser(item) if isinstance(item, str) and not isinstance(item, bool) else item
                 for item in val
             ]
+
+    if 'specific_behaviors' in resolved and isinstance(resolved['specific_behaviors'], str):
+        resolved['specific_behaviors'] = parse_json_or_val(resolved['specific_behaviors'])
+    if 'ID_colors' in resolved and isinstance(resolved['ID_colors'], str):
+        resolved['ID_colors'] = parse_json_or_val(resolved['ID_colors'])
+    if 'animal_number' in resolved and isinstance(resolved['animal_number'], str):
+        resolved['animal_number'] = parse_json_or_val(resolved['animal_number'])
 
     validate_types_and_ranges(command_name, resolved)
 
@@ -363,21 +431,15 @@ def build_parser():
     infer_parser.add_argument("--decode-extraction", action=argparse.BooleanOptionalAction, default=None, help="Extract start/end frame times")
     infer_parser.add_argument("--ex-start", type=int, default=None, help="Extraction start frame number")
     infer_parser.add_argument("--ex-end", type=int, default=None, help="Extraction end frame number")
-    infer_parser.add_argument("--animal-vs-bg", type=int, default=None, help="Animal brightness relative to background")
     infer_parser.add_argument("--stable-illumination", action=argparse.BooleanOptionalAction, default=None, help="Illumination stability")
     infer_parser.add_argument("--ID-colors", type=str, default=None, help="Colormap sequence mapping IDs to colors")
     infer_parser.add_argument("--parameter-to-analyze", type=str, nargs="+", default=None, help="Kinematic parameters to extract")
     infer_parser.add_argument("--uncertain", type=float, default=None, help="Uncertainty threshold")
     infer_parser.add_argument("--min-length", type=int, default=None, help="Minimum behavior length in frames")
     infer_parser.add_argument("--show-legend", action=argparse.BooleanOptionalAction, default=None, help="Render behavior legend overlays")
-    infer_parser.add_argument("--background-free", action=argparse.BooleanOptionalAction, default=None, help="Remove background from calculations")
-    infer_parser.add_argument("--black-background", action=argparse.BooleanOptionalAction, default=None, help="Convert background elements to solid black")
     infer_parser.add_argument("--normalize-distance", action=argparse.BooleanOptionalAction, default=None, help="Normalize metrics relative to contour sizes")
-    infer_parser.add_argument("--social-distance", type=float, default=None, help="Social distance radius parameter")
-    infer_parser.add_argument("--color-costar", action=argparse.BooleanOptionalAction, default=None, help="Render costar characters in RGB scale")
     infer_parser.add_argument("--correct-id", action=argparse.BooleanOptionalAction, default=None, help="Run ID correction heuristics")
     infer_parser.add_argument("--specific-behaviors", type=str, default=None, help="Specific behavior definitions JSON")
-    infer_parser.add_argument("--behavior-mode", type=int, default=None, help="Behavior mode selection")
     infer_parser.set_defaults(func=handle_infer)
 
     return parser
@@ -548,11 +610,8 @@ def handle_infer(args):
         cli_args_dict=vars(args)
     )
     
-    os.makedirs(config['result_path'], exist_ok=True)
-    print(f"Starting headless behavioral inference on {len(config['path_to_videos'])} video path(s)...", file=sys.stdout)
-    
     # cont in C2
-    print("Behavioral inference executed.", file=sys.stdout)
+    raise NotImplementedError("Inference workflow execution is not yet implemented (scheduled for Checkpoint 2).")
 
 
 def main(argv=None):
@@ -589,6 +648,9 @@ def main(argv=None):
     except CLIConfigError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
+    except NotImplementedError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     except Exception as e:
         print(f"Execution Error: {e}", file=sys.stderr)
         return 1
