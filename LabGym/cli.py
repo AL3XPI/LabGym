@@ -618,31 +618,94 @@ def load_categorizer_metadata(path_to_categorizer):
     except Exception as e:
         raise CLIConfigError(f"Error reading Categorizer parameters in '{param_path}': {e}")
 
-    if 'classnames' not in parameters or len(parameters['classnames']) == 0:
-        raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': missing 'classnames'.")
+    required_cols = [
+        'classnames', 'channel', 'time_step', 'network',
+        'inner_code', 'std', 'background_free', 'black_background',
+        'behavior_kind', 'social_distance'
+    ]
+    for col in required_cols:
+        if col not in parameters or len(parameters[col]) == 0 or pd.isna(parameters[col][0]):
+            raise CLIConfigError(
+                f"Malformed Categorizer model parameters in '{param_path}': missing required field '{col}'."
+            )
 
     classnames = [str(x) for x in list(parameters['classnames']) if pd.notna(x)]
     if not classnames:
         raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'classnames' is empty.")
 
-    dim_conv = int(parameters['dim_conv'][0]) if 'dim_conv' in parameters else 64
-    dim_tconv = int(parameters['dim_tconv'][0]) if 'dim_tconv' in parameters else 32
-    channel = int(parameters['channel'][0]) if 'channel' in parameters else 1
-    length = int(parameters['time_step'][0]) if 'time_step' in parameters else 15
-    if length < 3:
+    try:
+        categorizer_type = int(parameters['network'][0])
+    except (ValueError, TypeError):
+        raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'network' must be an integer.")
+
+    if categorizer_type not in (0, 1, 2):
+        raise CLIConfigError(
+            f"Malformed Categorizer model parameters in '{param_path}': invalid 'network' value {categorizer_type} (expected 0, 1, or 2)."
+        )
+
+    if categorizer_type in (0, 2):
+        if 'dim_conv' not in parameters or pd.isna(parameters['dim_conv'][0]):
+            raise CLIConfigError(
+                f"Malformed Categorizer model parameters in '{param_path}': missing required architecture field 'dim_conv'."
+            )
+        try:
+            dim_conv = int(parameters['dim_conv'][0])
+        except (ValueError, TypeError):
+            raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'dim_conv' must be an integer.")
+    else:
+        dim_conv = int(parameters['dim_conv'][0]) if ('dim_conv' in parameters and pd.notna(parameters['dim_conv'][0])) else 0
+
+    if categorizer_type in (1, 2):
+        if 'dim_tconv' not in parameters or pd.isna(parameters['dim_tconv'][0]):
+            raise CLIConfigError(
+                f"Malformed Categorizer model parameters in '{param_path}': missing required architecture field 'dim_tconv'."
+            )
+        try:
+            dim_tconv = int(parameters['dim_tconv'][0])
+        except (ValueError, TypeError):
+            raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'dim_tconv' must be an integer.")
+        if 'color_code' not in parameters or pd.isna(parameters['color_code'][0]):
+            raise CLIConfigError(
+                f"Malformed Categorizer model parameters in '{param_path}': missing required field 'color_code'."
+            )
+        try:
+            color_costar = (int(parameters['color_code'][0]) == 0)
+        except (ValueError, TypeError):
+            raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'color_code' must be an integer.")
+    else:
+        dim_tconv = int(parameters['dim_tconv'][0]) if ('dim_tconv' in parameters and pd.notna(parameters['dim_tconv'][0])) else 0
+        if 'color_code' in parameters and pd.notna(parameters['color_code'][0]):
+            try:
+                color_costar = (int(parameters['color_code'][0]) == 0)
+            except (ValueError, TypeError):
+                raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'color_code' must be an integer.")
+        else:
+            color_costar = False
+
+    try:
+        channel = int(parameters['channel'][0])
+        length = int(parameters['time_step'][0])
+        inner_code = int(parameters['inner_code'][0])
+        std = int(parameters['std'][0])
+        background_free_val = int(parameters['background_free'][0])
+        black_background_val = int(parameters['black_background'][0])
+        behavior_mode = int(parameters['behavior_kind'][0])
+        social_distance = float(parameters['social_distance'][0])
+    except (ValueError, TypeError) as e:
+        raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': invalid numeric value ({e}).")
+
+    if channel not in (1, 3):
+        raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': invalid channel {channel} (expected 1 or 3).")
+
+    if length < 3 and behavior_mode < 3:
         length = 3
 
-    categorizer_type = int(parameters['network'][0]) if 'network' in parameters else 0
     animation_analyzer = (categorizer_type == 2)
-    include_bodyparts = (int(parameters['inner_code'][0]) == 0) if 'inner_code' in parameters else True
-    std = int(parameters['std'][0]) if 'std' in parameters else 0
-    background_free = (int(parameters['background_free'][0]) == 0) if 'background_free' in parameters else True
-    black_background = not (int(parameters['black_background'][0]) == 1) if 'black_background' in parameters else True
-    behavior_mode = int(parameters['behavior_kind'][0]) if 'behavior_kind' in parameters else 0
-    social_distance = int(parameters['social_distance'][0]) if 'social_distance' in parameters else 0
+    include_bodyparts = (inner_code == 0)
+    background_free = (background_free_val == 0)
+    black_background = not (black_background_val == 1)
     if behavior_mode == 2 and social_distance == 0:
         social_distance = float('inf')
-    color_costar = (int(parameters['color_code'][0]) == 0) if 'color_code' in parameters else False
 
     complete_colors = list(mpl.colors.cnames.values())
     colors = [['#ffffff', c] for c in complete_colors]
@@ -691,8 +754,30 @@ def load_detector_metadata(path_to_detector):
     if not isinstance(detector_dict, dict):
         raise CLIConfigError(f"Malformed Detector model parameters in '{param_path}': must be a JSON object.")
 
-    animal_mapping = detector_dict.get('animal_mapping', {})
-    inferencing_framesize = detector_dict.get('inferencing_framesize', 480)
+    if 'animal_mapping' not in detector_dict:
+        raise CLIConfigError(
+            f"Malformed Detector model parameters in '{param_path}': missing required field 'animal_mapping'."
+        )
+    animal_mapping = detector_dict['animal_mapping']
+    if not isinstance(animal_mapping, dict) or not animal_mapping:
+        raise CLIConfigError(
+            f"Malformed Detector model parameters in '{param_path}': 'animal_mapping' must be a non-empty dictionary."
+        )
+
+    if 'inferencing_framesize' not in detector_dict:
+        raise CLIConfigError(
+            f"Malformed Detector model parameters in '{param_path}': missing required field 'inferencing_framesize'."
+        )
+    try:
+        inferencing_framesize = int(detector_dict['inferencing_framesize'])
+    except (ValueError, TypeError):
+        raise CLIConfigError(
+            f"Malformed Detector model parameters in '{param_path}': 'inferencing_framesize' must be an integer."
+        )
+    if inferencing_framesize <= 0:
+        raise CLIConfigError(
+            f"Malformed Detector model parameters in '{param_path}': 'inferencing_framesize' must be a positive integer."
+        )
 
     return {
         'animal_mapping': animal_mapping,
@@ -706,6 +791,7 @@ def resolve_media_paths(paths, behavior_mode):
     else:
         valid_exts = {'.avi', '.mpg', '.mpeg', '.wmv', '.mp4', '.mkv', '.m4v', '.mov'}
 
+    media_type = "image" if behavior_mode == 3 else "video"
     resolved = []
     for p in paths:
         if os.path.isdir(p):
@@ -715,17 +801,23 @@ def resolve_media_paths(paths, behavior_mode):
             ]
             found.sort()
             if not found:
-                media_type = "image" if behavior_mode == 3 else "video"
                 raise CLIConfigError(f"No valid {media_type} files found in directory: '{p}'")
             resolved.extend(found)
         elif os.path.isfile(p):
+            ext = os.path.splitext(p)[1].lower()
+            if ext not in valid_exts:
+                supported = ", ".join(sorted(valid_exts))
+                raise CLIConfigError(
+                    f"Unsupported {media_type} file format: '{p}'. Supported extensions: {supported}"
+                )
             resolved.append(p)
         else:
             raise CLIConfigError(f"Specified media path does not exist: '{p}'")
 
-    if not resolved:
-        raise CLIConfigError("No valid video or image files found for inference.")
-    return resolved
+    deduped = list(dict.fromkeys(resolved))
+    if not deduped:
+        raise CLIConfigError(f"No valid {media_type} files found for inference.")
+    return deduped
 
 
 def handle_infer(args):
@@ -742,8 +834,6 @@ def handle_infer(args):
     path_to_detector = config['path_to_detector']
     use_detector = config['use_detector']
     result_path = config['result_path']
-
-    os.makedirs(result_path, exist_ok=True)
 
     if use_detector and not path_to_detector:
         raise CLIConfigError("Option '--use-detector' requires '--path-to-detector' to be specified.")
@@ -794,11 +884,14 @@ def handle_infer(args):
                 )
 
     input_paths = resolve_media_paths(config['path_to_videos'], behavior_mode)
+
+    if behavior_mode == 3 and (not path_to_categorizer or not path_to_detector):
+        raise CLIConfigError("Static image inference (behavior_mode=3) requires both Categorizer and Detector.")
+
+    os.makedirs(result_path, exist_ok=True)
     print(f"Starting headless behavioral inference on {len(input_paths)} file(s)...", file=sys.stdout)
 
     if behavior_mode == 3:
-        if not path_to_categorizer or not path_to_detector:
-            raise CLIConfigError("Static image inference (behavior_mode=3) requires both Categorizer and Detector.")
         from LabGym.analyzebehavior_dt import AnalyzeAnimalDetector
         AAD = AnalyzeAnimalDetector()
         detector_batch = max(1, config['detector_batch'])

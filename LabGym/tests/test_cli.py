@@ -641,7 +641,28 @@ def test_load_categorizer_metadata_missing_and_malformed(tmp_path):
     bad_param.write_text("invalid_column\n1\n")
     with pytest.raises(CLIConfigError) as exc_info:
         load_categorizer_metadata(str(empty_dir))
-    assert "missing 'classnames'" in str(exc_info.value)
+    assert "missing required field 'classnames'" in str(exc_info.value)
+
+    # Test missing channel
+    missing_channel = empty_dir / "model_parameters.txt"
+    missing_channel.write_text("classnames,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance\ngroom,15,0,0,0,0,0,0,0\n")
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_categorizer_metadata(str(empty_dir))
+    assert "missing required field 'channel'" in str(exc_info.value)
+
+    # Test missing dim_conv for network 0
+    missing_dim = empty_dir / "model_parameters.txt"
+    missing_dim.write_text("classnames,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance\ngroom,1,15,0,0,0,0,0,0,0\n")
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_categorizer_metadata(str(empty_dir))
+    assert "missing required architecture field 'dim_conv'" in str(exc_info.value)
+
+    # Test missing dim_tconv for network 1
+    missing_tconv = empty_dir / "model_parameters.txt"
+    missing_tconv.write_text("classnames,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\ngroom,1,15,1,0,0,0,0,0,0,0\n")
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_categorizer_metadata(str(empty_dir))
+    assert "missing required architecture field 'dim_tconv'" in str(exc_info.value)
 
 
 def test_load_detector_metadata(tmp_path):
@@ -665,21 +686,58 @@ def test_load_detector_metadata(tmp_path):
         load_detector_metadata(str(bad_det))
     assert "Error reading Detector model parameters" in str(exc_info.value)
 
+    # Test missing animal_mapping
+    (bad_det / "model_parameters.txt").write_text(json.dumps({"inferencing_framesize": 480}))
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_detector_metadata(str(bad_det))
+    assert "missing required field 'animal_mapping'" in str(exc_info.value)
+
+    # Test empty animal_mapping
+    (bad_det / "model_parameters.txt").write_text(json.dumps({"animal_mapping": {}, "inferencing_framesize": 480}))
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_detector_metadata(str(bad_det))
+    assert "'animal_mapping' must be a non-empty dictionary" in str(exc_info.value)
+
+    # Test missing inferencing_framesize
+    (bad_det / "model_parameters.txt").write_text(json.dumps({"animal_mapping": {"0": "mouse"}}))
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_detector_metadata(str(bad_det))
+    assert "missing required field 'inferencing_framesize'" in str(exc_info.value)
+
+    # Test invalid inferencing_framesize
+    (bad_det / "model_parameters.txt").write_text(json.dumps({"animal_mapping": {"0": "mouse"}, "inferencing_framesize": -5}))
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_detector_metadata(str(bad_det))
+    assert "'inferencing_framesize' must be a positive integer" in str(exc_info.value)
+
 
 def test_resolve_media_paths(tmp_path):
     v1 = tmp_path / "v1.mp4"
     v1.write_text("video")
     v2 = tmp_path / "v2.avi"
     v2.write_text("video")
-    txt = tmp_path / "ignore.txt"
+    txt = tmp_path / "notes.txt"
     txt.write_text("text")
 
+    # Directory ignores non-media files
     resolved = resolve_media_paths([str(tmp_path)], behavior_mode=0)
     assert resolved == [str(v1), str(v2)]
 
+    # Single media file resolves
     single = resolve_media_paths([str(v1)], behavior_mode=0)
     assert single == [str(v1)]
 
+    # Deduplication preserves order
+    dup = resolve_media_paths([str(v1), str(v2), str(v1)], behavior_mode=0)
+    assert dup == [str(v1), str(v2)]
+
+    # Reject unsupported individual files (e.g. notes.txt)
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_media_paths([str(txt)], behavior_mode=0)
+    assert "Unsupported video file format" in str(exc_info.value)
+    assert "notes.txt" in str(exc_info.value)
+
+    # Nonexistent path
     with pytest.raises(CLIConfigError) as exc_info:
         resolve_media_paths([str(tmp_path / "ghost.mp4")], behavior_mode=0)
     assert "Specified media path does not exist" in str(exc_info.value)
@@ -688,8 +746,21 @@ def test_resolve_media_paths(tmp_path):
 def test_handle_infer_missing_detector_when_use_detector_true(tmp_path):
     v = tmp_path / "v.mp4"
     v.write_text("video")
-    exit_code = main(["infer", "--path-to-videos", str(v), "--result-path", str(tmp_path / "out"), "--use-detector"])
+    out = tmp_path / "never_created"
+    exit_code = main(["infer", "--path-to-videos", str(v), "--result-path", str(out), "--use-detector"])
     assert exit_code == 2
+    assert not out.exists()
+
+
+def test_handle_infer_does_not_create_output_dir_on_failure(tmp_path):
+    txt = tmp_path / "notes.txt"
+    txt.write_text("notes")
+    out = tmp_path / "out_uncreated"
+
+    # Fails because notes.txt is not a supported media file
+    exit_code = main(["infer", "--path-to-videos", str(txt), "--result-path", str(out)])
+    assert exit_code == 2
+    assert not out.exists()
 
 
 def test_handle_infer_unknown_behavior_requested(tmp_path):
@@ -698,9 +769,11 @@ def test_handle_infer_unknown_behavior_requested(tmp_path):
     (cat_dir / "model_parameters.txt").write_text("classnames,dim_conv,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\ngroom,64,1,15,0,0,0,0,0,0,0,1\n")
     v = tmp_path / "v.mp4"
     v.write_text("video")
+    out = tmp_path / "out_uncreated_behavior"
 
-    exit_code = main(["infer", "--path-to-videos", str(v), "--result-path", str(tmp_path / "out"), "--path-to-categorizer", str(cat_dir), "--behavior-to-include", "flying"])
+    exit_code = main(["infer", "--path-to-videos", str(v), "--result-path", str(out), "--path-to-categorizer", str(cat_dir), "--behavior-to-include", "flying"])
     assert exit_code == 2
+    assert not out.exists()
 
 
 def test_handle_infer_e2e_animal_execution(tmp_path, capsys):
