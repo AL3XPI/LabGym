@@ -122,9 +122,9 @@ def validate_types_and_ranges(command_name, config):
     for path_key in PATH_KEYS:
         if path_key in config and config[path_key] is not None:
             val = config[path_key]
-            if isinstance(val, bool) or not isinstance(val, str):
+            if isinstance(val, bool) or not isinstance(val, str) or not val.strip():
                 raise CLIConfigError(
-                    f"Parameter '{path_key}' must be a string path (got {type(val).__name__}: {val!r})."
+                    f"Parameter '{path_key}' must be a non-empty string path (got {type(val).__name__}: {val!r})."
                 )
 
     if 'path_to_videos' in config and config['path_to_videos'] is not None:
@@ -134,9 +134,9 @@ def validate_types_and_ranges(command_name, config):
                 f"Parameter 'path_to_videos' must be a non-empty list of video paths (got {val!r})."
             )
         for item in val:
-            if isinstance(item, bool) or not isinstance(item, str):
+            if isinstance(item, bool) or not isinstance(item, str) or not item.strip():
                 raise CLIConfigError(
-                    f"Items in 'path_to_videos' must be string paths (got {item!r})."
+                    f"Items in 'path_to_videos' must be non-empty string paths (got {item!r})."
                 )
 
     pos_int_keys = [
@@ -600,6 +600,134 @@ def handle_test_detector(args):
     print("Detector testing completed successfully.", file=sys.stdout)
 
 
+def load_categorizer_metadata(path_to_categorizer):
+    if not os.path.isdir(path_to_categorizer):
+        raise CLIConfigError(f"Categorizer model directory not found: '{path_to_categorizer}'")
+
+    param_path = os.path.join(path_to_categorizer, 'model_parameters.txt')
+    if not os.path.isfile(param_path):
+        raise CLIConfigError(
+            f"Categorizer model parameters file not found in '{path_to_categorizer}'. Expected 'model_parameters.txt'."
+        )
+
+    import pandas as pd
+    import matplotlib as mpl
+
+    try:
+        parameters = pd.read_csv(param_path)
+    except Exception as e:
+        raise CLIConfigError(f"Error reading Categorizer parameters in '{param_path}': {e}")
+
+    if 'classnames' not in parameters or len(parameters['classnames']) == 0:
+        raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': missing 'classnames'.")
+
+    classnames = [str(x) for x in list(parameters['classnames']) if pd.notna(x)]
+    if not classnames:
+        raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'classnames' is empty.")
+
+    dim_conv = int(parameters['dim_conv'][0]) if 'dim_conv' in parameters else 64
+    dim_tconv = int(parameters['dim_tconv'][0]) if 'dim_tconv' in parameters else 32
+    channel = int(parameters['channel'][0]) if 'channel' in parameters else 1
+    length = int(parameters['time_step'][0]) if 'time_step' in parameters else 15
+    if length < 3:
+        length = 3
+
+    categorizer_type = int(parameters['network'][0]) if 'network' in parameters else 0
+    animation_analyzer = (categorizer_type == 2)
+    include_bodyparts = (int(parameters['inner_code'][0]) == 0) if 'inner_code' in parameters else True
+    std = int(parameters['std'][0]) if 'std' in parameters else 0
+    background_free = (int(parameters['background_free'][0]) == 0) if 'background_free' in parameters else True
+    black_background = not (int(parameters['black_background'][0]) == 1) if 'black_background' in parameters else True
+    behavior_mode = int(parameters['behavior_kind'][0]) if 'behavior_kind' in parameters else 0
+    social_distance = int(parameters['social_distance'][0]) if 'social_distance' in parameters else 0
+    if behavior_mode == 2 and social_distance == 0:
+        social_distance = float('inf')
+    color_costar = (int(parameters['color_code'][0]) == 0) if 'color_code' in parameters else False
+
+    complete_colors = list(mpl.colors.cnames.values())
+    colors = [['#ffffff', c] for c in complete_colors]
+    behaviornames_and_colors = {}
+    for behavior_name in classnames:
+        idx = classnames.index(behavior_name)
+        if idx < len(colors):
+            behaviornames_and_colors[behavior_name] = colors[idx]
+        else:
+            behaviornames_and_colors[behavior_name] = ['#ffffff', '#ffffff']
+
+    return {
+        'classnames': classnames,
+        'dim_conv': dim_conv,
+        'dim_tconv': dim_tconv,
+        'channel': channel,
+        'length': length,
+        'animation_analyzer': animation_analyzer,
+        'include_bodyparts': include_bodyparts,
+        'std': std,
+        'background_free': background_free,
+        'black_background': black_background,
+        'behavior_mode': behavior_mode,
+        'social_distance': social_distance,
+        'color_costar': color_costar,
+        'behaviornames_and_colors': behaviornames_and_colors,
+    }
+
+
+def load_detector_metadata(path_to_detector):
+    if not os.path.isdir(path_to_detector):
+        raise CLIConfigError(f"Detector model directory not found: '{path_to_detector}'")
+
+    param_path = os.path.join(path_to_detector, 'model_parameters.txt')
+    if not os.path.isfile(param_path):
+        raise CLIConfigError(
+            f"Detector model parameters file not found in '{path_to_detector}'. Expected 'model_parameters.txt'."
+        )
+
+    try:
+        with open(param_path, 'r', encoding='utf-8') as f:
+            detector_dict = json.load(f)
+    except Exception as e:
+        raise CLIConfigError(f"Error reading Detector model parameters in '{param_path}': {e}")
+
+    if not isinstance(detector_dict, dict):
+        raise CLIConfigError(f"Malformed Detector model parameters in '{param_path}': must be a JSON object.")
+
+    animal_mapping = detector_dict.get('animal_mapping', {})
+    inferencing_framesize = detector_dict.get('inferencing_framesize', 480)
+
+    return {
+        'animal_mapping': animal_mapping,
+        'inferencing_framesize': inferencing_framesize,
+    }
+
+
+def resolve_media_paths(paths, behavior_mode):
+    if behavior_mode == 3:
+        valid_exts = {'.jpg', '.jpeg', '.png', '.tiff', '.bmp'}
+    else:
+        valid_exts = {'.avi', '.mpg', '.mpeg', '.wmv', '.mp4', '.mkv', '.m4v', '.mov'}
+
+    resolved = []
+    for p in paths:
+        if os.path.isdir(p):
+            found = [
+                os.path.join(p, f) for f in os.listdir(p)
+                if os.path.splitext(f)[1].lower() in valid_exts
+            ]
+            found.sort()
+            if not found:
+                media_type = "image" if behavior_mode == 3 else "video"
+                raise CLIConfigError(f"No valid {media_type} files found in directory: '{p}'")
+            resolved.extend(found)
+        elif os.path.isfile(p):
+            resolved.append(p)
+        else:
+            raise CLIConfigError(f"Specified media path does not exist: '{p}'")
+
+    if not resolved:
+        raise CLIConfigError("No valid video or image files found for inference.")
+    return resolved
+
+
 def handle_infer(args):
     config = resolve_config(
         command_name="labgym infer",
@@ -609,9 +737,241 @@ def handle_infer(args):
         config_path=args.config,
         cli_args_dict=vars(args)
     )
-    
-    # cont in C2
-    raise NotImplementedError("Inference workflow execution is not yet implemented (scheduled for Checkpoint 2).")
+
+    path_to_categorizer = config['path_to_categorizer']
+    path_to_detector = config['path_to_detector']
+    use_detector = config['use_detector']
+    result_path = config['result_path']
+
+    os.makedirs(result_path, exist_ok=True)
+
+    if use_detector and not path_to_detector:
+        raise CLIConfigError("Option '--use-detector' requires '--path-to-detector' to be specified.")
+
+    if path_to_categorizer:
+        cat_meta = load_categorizer_metadata(path_to_categorizer)
+    else:
+        cat_meta = {
+            'classnames': [],
+            'dim_conv': 64,
+            'dim_tconv': 32,
+            'channel': 1,
+            'length': 15,
+            'animation_analyzer': False,
+            'include_bodyparts': True,
+            'std': 0,
+            'background_free': True,
+            'black_background': True,
+            'behavior_mode': 0,
+            'social_distance': 0.0,
+            'color_costar': False,
+            'behaviornames_and_colors': {},
+        }
+
+    behavior_mode = cat_meta['behavior_mode']
+
+    if path_to_detector:
+        det_meta = load_detector_metadata(path_to_detector)
+        if config['animal_kinds'] == ['animal'] and det_meta['animal_mapping']:
+            animal_kinds = [str(v) for v in det_meta['animal_mapping'].values()]
+        else:
+            animal_kinds = list(config['animal_kinds'])
+    else:
+        animal_kinds = list(config['animal_kinds'])
+
+    animal_to_include = list(config['animal_to_include']) if config['animal_to_include'] else list(animal_kinds)
+
+    behavior_to_include = list(config['behavior_to_include'])
+    if not path_to_categorizer:
+        behavior_to_include = []
+    elif not behavior_to_include or behavior_to_include == ['all']:
+        behavior_to_include = list(cat_meta['behaviornames_and_colors'].keys())
+    else:
+        for b in behavior_to_include:
+            if b not in cat_meta['classnames']:
+                raise CLIConfigError(
+                    f"Behavior '{b}' not found in Categorizer model. Available: {cat_meta['classnames']}"
+                )
+
+    input_paths = resolve_media_paths(config['path_to_videos'], behavior_mode)
+    print(f"Starting headless behavioral inference on {len(input_paths)} file(s)...", file=sys.stdout)
+
+    if behavior_mode == 3:
+        if not path_to_categorizer or not path_to_detector:
+            raise CLIConfigError("Static image inference (behavior_mode=3) requires both Categorizer and Detector.")
+        from LabGym.analyzebehavior_dt import AnalyzeAnimalDetector
+        AAD = AnalyzeAnimalDetector()
+        detector_batch = max(1, config['detector_batch'])
+        AAD.analyze_images_individuals(
+            path_to_detector, input_paths, result_path, animal_kinds,
+            path_to_categorizer=path_to_categorizer, generate=False,
+            animal_to_include=animal_to_include, behavior_to_include=behavior_to_include,
+            names_and_colors=cat_meta['behaviornames_and_colors'], imagewidth=config['framewidth'],
+            dim_conv=cat_meta['dim_conv'], channel=cat_meta['channel'],
+            detection_threshold=config['detection_threshold'], uncertain=config['uncertain'],
+            background_free=cat_meta['background_free'], black_background=cat_meta['black_background'],
+            social_distance=0
+        )
+    else:
+        import pandas as pd
+        from LabGym.tools import plot_events
+
+        all_events = {}
+        event_data = {}
+        all_time = []
+
+        if use_detector:
+            for animal_name in animal_kinds:
+                all_events[animal_name] = {}
+            detector_batch = max(1, config['detector_batch'])
+
+        categorize_behavior = (path_to_categorizer is not None)
+
+        for video_path in input_paths:
+            filename = os.path.splitext(os.path.basename(video_path))[0].split('_')
+            animal_num = config['animal_number']
+            t_val = config['t']
+            ex_start_val = config['ex_start']
+            ex_end_val = config['ex_end']
+
+            if config['decode_animalnumber']:
+                if use_detector:
+                    animal_num = {}
+                    number = [x[1:] for x in filename if len(x) > 1 and x[0] == 'n']
+                    for a, animal_name in enumerate(animal_kinds):
+                        if a < len(number) and number[a].isdigit():
+                            animal_num[animal_name] = int(number[a])
+                        else:
+                            animal_num[animal_name] = 1
+                else:
+                    for x in filename:
+                        if len(x) > 1 and x[0] == 'n' and x[1:].isdigit():
+                            animal_num = int(x[1:])
+            elif animal_num is None:
+                if use_detector:
+                    animal_num = {animal_name: 1 for animal_name in animal_kinds}
+                else:
+                    animal_num = 1
+            elif isinstance(animal_num, int):
+                if use_detector:
+                    animal_num = {animal_name: animal_num for animal_name in animal_kinds}
+            elif isinstance(animal_num, dict):
+                if use_detector:
+                    animal_num = {animal_name: int(animal_num.get(animal_name, 1)) for animal_name in animal_kinds}
+                else:
+                    animal_num = int(list(animal_num.values())[0]) if animal_num else 1
+
+            if config['decode_t']:
+                for x in filename:
+                    if len(x) > 1 and x[0] == 'b':
+                        try:
+                            t_val = float(x[1:])
+                        except ValueError:
+                            pass
+
+            if config['decode_extraction']:
+                for x in filename:
+                    if len(x) > 2:
+                        if x[:2] == 'xs' and x[2:].isdigit():
+                            ex_start_val = int(x[2:])
+                        if x[:2] == 'xe' and x[2:].isdigit():
+                            ex_end_val = int(x[2:])
+
+            if not use_detector:
+                from LabGym.analyzebehavior import AnalyzeAnimal
+                AA = AnalyzeAnimal()
+                AA.prepare_analysis(
+                    video_path, result_path, animal_num, delta=config['delta'],
+                    names_and_colors=cat_meta['behaviornames_and_colors'], framewidth=config['framewidth'],
+                    stable_illumination=config['stable_illumination'], dim_tconv=cat_meta['dim_tconv'],
+                    dim_conv=cat_meta['dim_conv'], channel=cat_meta['channel'],
+                    include_bodyparts=cat_meta['include_bodyparts'], std=cat_meta['std'],
+                    categorize_behavior=categorize_behavior, animation_analyzer=cat_meta['animation_analyzer'],
+                    path_background=config['background_path'], autofind_t=config['autofind_t'],
+                    t=t_val, duration=config['duration'], ex_start=ex_start_val, ex_end=ex_end_val,
+                    length=cat_meta['length'], animal_vs_bg=0
+                )
+                if behavior_mode == 0:
+                    AA.acquire_information(background_free=cat_meta['background_free'], black_background=cat_meta['black_background'])
+                    AA.craft_data()
+                    interact_all = False
+                else:
+                    AA.acquire_information_interact_basic(background_free=cat_meta['background_free'], black_background=cat_meta['black_background'])
+                    interact_all = True
+
+                if path_to_categorizer is not None:
+                    AA.categorize_behaviors(path_to_categorizer, uncertain=config['uncertain'], min_length=config['min_length'])
+
+                AA.annotate_video(config['ID_colors'], behavior_to_include, show_legend=config['show_legend'], interact_all=interact_all)
+                AA.export_results(normalize_distance=config['normalize_distance'], parameter_to_analyze=config['parameter_to_analyze'])
+
+                if path_to_categorizer is not None:
+                    for n in AA.event_probability:
+                        all_events[len(all_events)] = AA.event_probability[n]
+                    if len(all_time) < len(AA.all_time):
+                        all_time = AA.all_time
+            else:
+                from LabGym.analyzebehavior_dt import AnalyzeAnimalDetector
+                AAD = AnalyzeAnimalDetector()
+                AAD.prepare_analysis(
+                    path_to_detector, video_path, result_path, animal_num, animal_kinds, behavior_mode,
+                    names_and_colors=cat_meta['behaviornames_and_colors'], framewidth=config['framewidth'],
+                    dim_tconv=cat_meta['dim_tconv'], dim_conv=cat_meta['dim_conv'], channel=cat_meta['channel'],
+                    include_bodyparts=cat_meta['include_bodyparts'], std=cat_meta['std'],
+                    categorize_behavior=categorize_behavior, animation_analyzer=cat_meta['animation_analyzer'],
+                    t=t_val, duration=config['duration'], length=cat_meta['length'], social_distance=cat_meta['social_distance']
+                )
+                if behavior_mode == 1:
+                    AAD.acquire_information_interact_basic(
+                        batch_size=detector_batch, background_free=cat_meta['background_free'], black_background=cat_meta['black_background']
+                    )
+                else:
+                    AAD.acquire_information(
+                        batch_size=detector_batch, background_free=cat_meta['background_free'], black_background=cat_meta['black_background'],
+                        color_costar=cat_meta['color_costar']
+                    )
+                if behavior_mode != 1:
+                    AAD.craft_data()
+
+                if path_to_categorizer is not None:
+                    AAD.categorize_behaviors(path_to_categorizer, uncertain=config['uncertain'], min_length=config['min_length'])
+
+                if config['correct_ID']:
+                    AAD.correct_identity(config['specific_behaviors'])
+
+                AAD.annotate_video(animal_to_include, config['ID_colors'], behavior_to_include, show_legend=config['show_legend'])
+                AAD.export_results(normalize_distance=config['normalize_distance'], parameter_to_analyze=config['parameter_to_analyze'])
+
+                if path_to_categorizer is not None:
+                    for animal_name in animal_kinds:
+                        if animal_name in AAD.event_probability:
+                            for n in AAD.event_probability[animal_name]:
+                                all_events[animal_name][len(all_events[animal_name])] = AAD.event_probability[animal_name][n]
+                    if len(all_time) < len(AAD.all_time):
+                        all_time = AAD.all_time
+
+        if path_to_categorizer is not None and all_time:
+            max_length = len(all_time)
+            if not use_detector:
+                for n in all_events:
+                    event_data[len(event_data)] = all_events[n] + [['NA', -1]] * (max_length - len(all_events[n]))
+                if event_data:
+                    all_events_df = pd.DataFrame(event_data, index=all_time)
+                    all_events_df.to_excel(os.path.join(result_path, 'all_events.xlsx'), float_format='%.2f', index_label='time/ID')
+                    plot_events(result_path, event_data, all_time, cat_meta['behaviornames_and_colors'], behavior_to_include, width=0, height=0)
+            else:
+                for animal_name in animal_to_include:
+                    if animal_name in all_events:
+                        for n in all_events[animal_name]:
+                            event_data[len(event_data)] = all_events[animal_name][n] + [['NA', -1]] * (max_length - len(all_events[animal_name][n]))
+                        event_data[len(event_data)] = [['NA', -1]] * max_length
+                if event_data:
+                    del event_data[len(event_data) - 1]
+                    all_events_df = pd.DataFrame(event_data, index=all_time)
+                    all_events_df.to_excel(os.path.join(result_path, 'all_events.xlsx'), float_format='%.2f', index_label='time/ID')
+                    plot_events(result_path, event_data, all_time, cat_meta['behaviornames_and_colors'], behavior_to_include, width=0, height=0)
+
+    print("Inference completed successfully.", file=sys.stdout)
 
 
 def main(argv=None):

@@ -1,13 +1,18 @@
+import json
 import os
 import sys
 import pytest
 import yaml
+from unittest.mock import patch, MagicMock
 
 from LabGym.cli import (
     build_parser,
     resolve_config,
     CLIConfigError,
     main,
+    load_categorizer_metadata,
+    load_detector_metadata,
+    resolve_media_paths,
     TRAIN_CATEGORIZER_DEFAULTS,
     ALLOWED_TRAIN_CATEGORIZER_KEYS,
     REQUIRED_TRAIN_CATEGORIZER_KEYS,
@@ -598,8 +603,187 @@ def test_infer_rejects_model_preprocessing_settings(tmp_path):
         assert f"Unknown configuration key(s) in '{cfg}' for command 'labgym infer': {forbidden_key}" in str(exc_info.value)
 
 
-def test_infer_stub_reports_unimplemented_and_exits_with_error(capsys):
-    exit_code = main(["infer", "--path-to-videos", "vid.mp4", "--result-path", "out/"])
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "Inference workflow execution is not yet implemented (scheduled for Checkpoint 2)" in captured.err
+def test_load_categorizer_metadata_success(tmp_path):
+    cat_dir = tmp_path / "my_categorizer"
+    cat_dir.mkdir()
+    param_file = cat_dir / "model_parameters.txt"
+    with open(param_file, "w") as f:
+        f.write("classnames,dim_conv,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\n")
+        f.write("groom,64,1,15,0,0,0,0,0,0,0,1\n")
+        f.write("walk,64,1,15,0,0,0,0,0,0,0,1\n")
+
+    meta = load_categorizer_metadata(str(cat_dir))
+    assert meta['classnames'] == ['groom', 'walk']
+    assert meta['dim_conv'] == 64
+    assert meta['channel'] == 1
+    assert meta['length'] == 15
+    assert meta['animation_analyzer'] is False
+    assert meta['include_bodyparts'] is True
+    assert meta['background_free'] is True
+    assert meta['black_background'] is True
+    assert meta['behavior_mode'] == 0
+    assert 'groom' in meta['behaviornames_and_colors']
+    assert 'walk' in meta['behaviornames_and_colors']
+
+
+def test_load_categorizer_metadata_missing_and_malformed(tmp_path):
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_categorizer_metadata(str(tmp_path / "nonexistent"))
+    assert "Categorizer model directory not found" in str(exc_info.value)
+
+    empty_dir = tmp_path / "empty_cat"
+    empty_dir.mkdir()
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_categorizer_metadata(str(empty_dir))
+    assert "parameters file not found" in str(exc_info.value)
+
+    bad_param = empty_dir / "model_parameters.txt"
+    bad_param.write_text("invalid_column\n1\n")
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_categorizer_metadata(str(empty_dir))
+    assert "missing 'classnames'" in str(exc_info.value)
+
+
+def test_load_detector_metadata(tmp_path):
+    det_dir = tmp_path / "my_detector"
+    det_dir.mkdir()
+    param_file = det_dir / "model_parameters.txt"
+    param_file.write_text(json.dumps({"animal_mapping": {"0": "mouse"}, "inferencing_framesize": 480}))
+
+    meta = load_detector_metadata(str(det_dir))
+    assert meta['animal_mapping'] == {"0": "mouse"}
+    assert meta['inferencing_framesize'] == 480
+
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_detector_metadata(str(tmp_path / "nonexistent"))
+    assert "Detector model directory not found" in str(exc_info.value)
+
+    bad_det = tmp_path / "bad_det"
+    bad_det.mkdir()
+    (bad_det / "model_parameters.txt").write_text("not json")
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_detector_metadata(str(bad_det))
+    assert "Error reading Detector model parameters" in str(exc_info.value)
+
+
+def test_resolve_media_paths(tmp_path):
+    v1 = tmp_path / "v1.mp4"
+    v1.write_text("video")
+    v2 = tmp_path / "v2.avi"
+    v2.write_text("video")
+    txt = tmp_path / "ignore.txt"
+    txt.write_text("text")
+
+    resolved = resolve_media_paths([str(tmp_path)], behavior_mode=0)
+    assert resolved == [str(v1), str(v2)]
+
+    single = resolve_media_paths([str(v1)], behavior_mode=0)
+    assert single == [str(v1)]
+
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_media_paths([str(tmp_path / "ghost.mp4")], behavior_mode=0)
+    assert "Specified media path does not exist" in str(exc_info.value)
+
+
+def test_handle_infer_missing_detector_when_use_detector_true(tmp_path):
+    v = tmp_path / "v.mp4"
+    v.write_text("video")
+    exit_code = main(["infer", "--path-to-videos", str(v), "--result-path", str(tmp_path / "out"), "--use-detector"])
+    assert exit_code == 2
+
+
+def test_handle_infer_unknown_behavior_requested(tmp_path):
+    cat_dir = tmp_path / "cat"
+    cat_dir.mkdir()
+    (cat_dir / "model_parameters.txt").write_text("classnames,dim_conv,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\ngroom,64,1,15,0,0,0,0,0,0,0,1\n")
+    v = tmp_path / "v.mp4"
+    v.write_text("video")
+
+    exit_code = main(["infer", "--path-to-videos", str(v), "--result-path", str(tmp_path / "out"), "--path-to-categorizer", str(cat_dir), "--behavior-to-include", "flying"])
+    assert exit_code == 2
+
+
+def test_handle_infer_e2e_animal_execution(tmp_path, capsys):
+    cat_dir = tmp_path / "cat"
+    cat_dir.mkdir()
+    (cat_dir / "model_parameters.txt").write_text("classnames,dim_conv,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\ngroom,64,1,15,0,0,0,0,0,0,0,1\n")
+    v = tmp_path / "v_n1.mp4"
+    v.write_text("video")
+    out = tmp_path / "out"
+
+    class FakeAnimal:
+        def __init__(self):
+            self.event_probability = {0: [['groom', 0.95]]}
+            self.all_time = [0.1]
+        def prepare_analysis(self, *a, **k): pass
+        def acquire_information(self, *a, **k): pass
+        def craft_data(self): pass
+        def categorize_behaviors(self, *a, **k): pass
+        def annotate_video(self, *a, **k): pass
+        def export_results(self, *a, **k): pass
+
+    with patch('LabGym.analyzebehavior.AnalyzeAnimal', FakeAnimal), patch('LabGym.tools.plot_events'):
+        exit_code = main(["infer", "--path-to-videos", str(v), "--result-path", str(out), "--path-to-categorizer", str(cat_dir)])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "Inference completed successfully" in captured.out
+
+
+def test_handle_infer_e2e_detector_execution(tmp_path, capsys):
+    cat_dir = tmp_path / "cat"
+    cat_dir.mkdir()
+    (cat_dir / "model_parameters.txt").write_text("classnames,dim_conv,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\ngroom,64,1,15,0,0,0,0,0,0,0,1\n")
+    det_dir = tmp_path / "det"
+    det_dir.mkdir()
+    (det_dir / "model_parameters.txt").write_text(json.dumps({"animal_mapping": {"0": "mouse"}, "inferencing_framesize": 480}))
+    v = tmp_path / "v_n1.mp4"
+    v.write_text("video")
+    out = tmp_path / "out"
+
+    class FakeAnimalDetector:
+        def __init__(self):
+            self.event_probability = {'mouse': {0: [['groom', 0.95]]}}
+            self.all_time = [0.1]
+        def prepare_analysis(self, *a, **k): pass
+        def acquire_information(self, *a, **k): pass
+        def craft_data(self): pass
+        def categorize_behaviors(self, *a, **k): pass
+        def annotate_video(self, *a, **k): pass
+        def export_results(self, *a, **k): pass
+
+    with patch('LabGym.analyzebehavior_dt.AnalyzeAnimalDetector', FakeAnimalDetector), patch('LabGym.tools.plot_events'):
+        exit_code = main([
+            "infer",
+            "--path-to-videos", str(v),
+            "--result-path", str(out),
+            "--use-detector",
+            "--path-to-detector", str(det_dir),
+            "--path-to-categorizer", str(cat_dir)
+        ])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "Inference completed successfully" in captured.out
+
+
+def test_path_to_videos_rejects_empty_strings():
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym infer",
+            defaults=INFER_DEFAULTS,
+            allowed_keys=ALLOWED_INFER_KEYS,
+            required_keys=REQUIRED_INFER_KEYS,
+            config_path=None,
+            cli_args_dict={'path_to_videos': ['vid.mp4', ''], 'result_path': 'out/'}
+        )
+    assert "Items in 'path_to_videos' must be non-empty string paths" in str(exc_info.value)
+
+    with pytest.raises(CLIConfigError) as exc_info:
+        resolve_config(
+            command_name="labgym infer",
+            defaults=INFER_DEFAULTS,
+            allowed_keys=ALLOWED_INFER_KEYS,
+            required_keys=REQUIRED_INFER_KEYS,
+            config_path=None,
+            cli_args_dict={'path_to_videos': ['   '], 'result_path': 'out/'}
+        )
+    assert "Items in 'path_to_videos' must be non-empty string paths" in str(exc_info.value)

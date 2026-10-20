@@ -1,129 +1,175 @@
 # LabGym Command Line Interface (CLI) Guide
 
-This guide details the implementation, command syntax, configuration architecture, and parameter mapping of the headless command-line interface (CLI) for LabGym.
+This guide details the command syntax, configuration contract, parameter precedence, and options for the headless command-line interface (CLI) in LabGym.
 
 ---
 
-## 1. Architecture & GUI Alignment
+## 1. Architecture & Subcommand Structure
 
-The LabGym CLI is fully decoupled from the `wxPython` GUI, allowing training, evaluation, and inference workflows to run headlessly on remote cloud servers or High-Performance Computing (HPC) clusters utilizing schedulers like SLURM. 
+The LabGym CLI is organized into nested subcommands reflecting canonical actions and targets:
 
-### GUI-to-CLI Parameter Mapping
+* `labgym train categorizer`
+* `labgym train detector`
+* `labgym test categorizer`
+* `labgym test detector`
+* `labgym infer`
 
-The CLI options align directly with parameters defined across the three main GUI panels:
-
-| GUI Panel Field / Option | CLI Option Flag | YAML Configuration Key | Notes / Default Values |
-| :--- | :--- | :--- | :--- |
-| **Train Categorizers** | | | |
-| Select folder of sorted examples | `--data_path` | `data_path` | Dataset directory path |
-| Select cache folder for prepared examples | `--out_folder` | `out_folder` | Temporary directory path |
-| Specify network complexity/type | `--network_type` | `network_type` | `pattern_recognizer`, `animation_analyzer`, `combnet` |
-| Complexity levels (Lv1 to Lv5) | `--level_conv`, `--level_tconv` | `level_conv`, `level_tconv` | Network architectures complexity |
-| Input width, height, channels | `--dim_conv`, `--dim_tconv`, `--channel` | `dim_conv`, `dim_tconv`, `channel` | Resolution constraints (e.g., `64`, `32`, `1`) |
-| Frames per animation sequence | `--time_step` | `time_step` | Episode window duration (default `15`) |
-| Augmentation methods | `--aug_methods` | `aug_methods` | List of strings (e.g. `['rotate', 'flip']`) |
-| Save folder for training reports | `--out_path` | `out_path` | Export logs directory |
-| On-the-fly training | `--training_onfly` | `training_onfly` | Avoid caching prepared examples (`true`/`false`) |
-| **Train Detectors** | | | |
-| Select training images folder | `--path_to_trainingimages` | `path_to_trainingimages` | Directory containing raw pictures |
-| Select JSON annotation file | `--path_to_annotation` | `path_to_annotation` | COCO-formatted annotations |
-| Inferencing framesize | `--inference_size` | `inference_size` | Image frame size (default `480`) |
-| Training iterations | `--iteration_num` | `iteration_num` | Backpropagation cycles (default `200`) |
-| **Analyze Behaviors (Infer)** | | | |
-| Select Categorizer model | `--path_to_categorizer` | `path_to_categorizer` | Trained model path |
-| Select videos / images | `--path_to_videos` | `path_to_videos` | Input directory or list of file paths |
-| Select output folder | `--result_path` | `result_path` | Target output directory |
-| Specify object detector method | `--use_detector`, `--path_to_detector` | `use_detector`, `path_to_detector` | Toggle and path for Det2 model |
-| Analysis start offset | `--t` | `t` | Starting second offset (default `0.0`) |
-| Analysis duration | `--duration` | `duration` | Total evaluation length (default `0.0` = end) |
-| Number of animals | `--animal_number` | `animal_number` | Total target counts (integer or JSON map) |
-| Target behaviors to annotate | `--behavior_to_include` | `behavior_to_include` | List of target behavior names (default `['all']`) |
-| Target measurements | `--parameter_to_analyze` | `parameter_to_analyze` | Kinematic options |
-
----
-
-## 2. CLI Command Syntax & Option Overrides
-
-Every parameter mapped in the configuration files is exposed as an explicit CLI option flag. In-line flags dynamically override matching keys passed inside a YAML file.
-
-### Default GUI Fallback
-If you run `labgym` without any subcommands, it will fall back to starting the desktop GUI interface:
+Running `labgym` without a subcommand launches the desktop graphical interface:
 ```bash
 labgym
 ```
 
-### Subcommand `train`
-Headless training execution for Categorizers (sub-networks) or Detectors (object detection).
+### 3-Tier Precedence Hierarchy
+Workflows can be driven purely by inline CLI flags, by a YAML workflow file (`-c` / `--config`), or a combination:
+$$\text{Built-in Defaults} \quad\longrightarrow\quad \text{Workflow YAML } (\texttt{-c} \text{ / } \texttt{--config}) \quad\longrightarrow\quad \text{Inline CLI Overrides}$$
 
-*   **Syntax**:
-    ```bash
-    labgym train --config <file.yaml> [inline-overrides]
-    ```
-
-*   **Inline Parameters**:
-    *   `--network_type`: Choice of `pattern_recognizer`, `animation_analyzer`, `combnet`, `detector`
-    *   `--model_path`: Output model folder target
-    *   `--data_path`: Training examples directory path
-    *   `--training_onfly`: Enable/disable on-the-fly training (accepts `true` or `false`)
-    *   `--path_to_annotation`: Path to COCO annotation file (required if `--network_type detector`)
-    *   `--path_to_trainingimages`: Path to training images folder (required if `--network_type detector`)
-    *   `--iteration_num`: Detector training iterations (integer)
-    *   `--inference_size`: Detector inference frame size (integer)
-
-### Subcommand `test`
-Headless evaluation of a model (Categorizer or Detector) against a testing dataset. 
-
-For **Categorizer** evaluation, it automatically calculates mathematically exact centroids of behaviors in the high-dimensional penultimate-layer feature space using **Cosine Similarity**, executing the full diagnostics pipeline and rendering a formatted UMich-style `Triage_Action_Plan.pdf` inside the output `LabGym_Diagnostics/` folder.
-
-For **Detector** evaluation, it runs headless bounding box validation against annotated images and calculates mean Average Precision (mAP).
-
-*   **Syntax**:
-    ```bash
-    labgym test --config <file.yaml> [inline-overrides]
-    ```
-
-*   **Inline Parameters**:
-    *   `--model_type`: Choice of `categorizer` or `detector` (default: `categorizer`)
-    *   `--path_to_annotation`: Path to COCO JSON annotation file (required if `--model_type detector`)
-    *   `--groundtruth_path`: Directory containing true behavior classes (for Categorizers) or testing images directory (for Detectors)
-    *   `--model_path`: Trained model folder path under evaluation
-    *   `--result_path`: Output statistics/diagnostics folder path
-    *   `--redundant`: [Categorizer only] List of space-separated true-to-pred error pairs to triage as Redundant (Hypothesis 1)
-    *   `--emergent`: [Categorizer only] List of error pairs to triage as Emergent Behaviors (Hypothesis 2)
-    *   `--generalization`: [Categorizer only] List of error pairs to triage as Poor Generalization (Hypothesis 3)
-
-### Subcommand `infer`
-Headless tracking and behavior categorization on raw input videos or images.
-
-*   **Syntax**:
-    ```bash
-    labgym infer --config <file.yaml> [inline-overrides]
-    ```
-
-*   **Inline Parameters**:
-    *   `--path_to_videos`: Space-separated video files or a folder containing raw files
-    *   `--result_path`: Target results folder
-    *   `--path_to_categorizer`: Trained model path
-    *   `--use_detector`: Toggle detector usage (`true`/`false`)
-    *   `--path_to_detector`: Object detection model path
-    *   `--t`: Duration offset start (seconds)
-    *   `--duration`: Execution frame window (seconds)
+* Inline flags default to `None` so omitted flags never override YAML settings.
+* Paired Boolean flags (e.g. `--use-detector` and `--no-use-detector`) allow explicit override in either direction while preserving YAML defaults when omitted.
+* CLI options use kebab-case (`--data-path`), mapping directly to snake_case (`data_path`) in YAML and Python.
 
 ---
 
-## 3. YAML Configuration Schema Examples
+## 2. Command Reference
 
-Below are standard baseline configuration file structures matching each workflow subcommand.
+### `labgym train categorizer`
+Headless training for behavior classification sub-networks (Pattern Recognizer, Animation Analyzer, or CombNet).
 
-### `train_config.yaml` (Categorizer Sub-Network Training)
+* **Syntax**:
+  ```bash
+  labgym train categorizer --config <file.yaml> [inline-overrides]
+  ```
+
+* **Required Parameters**:
+  * `--data-path` (`data_path`): Path to training examples dataset directory
+  * `--model-path` (`model_path`): Destination directory for the trained model
+
+* **Key Options**:
+  * `--network-type` (`network_type`): `combnet` (default), `pattern_recognizer`, `animation_analyzer`, or `combined_network`
+  * `--out-path` (`out_path`): Directory for training logs and reports
+  * `--out-folder` (`out_folder`): Cache directory for prepared frames
+  * `--dim-conv` (`dim_conv`): Input size for Pattern Recognizer (default: 64)
+  * `--dim-tconv` (`dim_tconv`): Input size for Animation Analyzer (default: 32)
+  * `--channel` (`channel`): Image channels, 1 or 3 (default: 1)
+  * `--time-step` (`time_step`): Frames per behavioral sequence (default: 15)
+  * `--level-conv` (`level_conv`): Complexity level for Pattern Recognizer 1–5 (default: 2)
+  * `--level-tconv` (`level_tconv`): Complexity level for Animation Analyzer 1–5 (default: 1)
+  * `--aug-methods` (`aug_methods`): List of augmentation methods (e.g. `rotate`, `flip`)
+  * `--augvalid` / `--no-augvalid`: Validate augmentation data (default: True)
+  * `--include-bodyparts` / `--no-include-bodyparts`: Include body part contours (default: True)
+  * `--background-free` / `--no-background-free`: Exclude background from calculations (default: True)
+  * `--black-background` / `--no-black-background`: Use black background (default: True)
+  * `--behavior-mode` (`behavior_mode`): Mode 0 (standard), 1 (basic interactive), 2 (advanced interactive), 3 (static images)
+  * `--social-distance` (`social_distance`): Social interaction distance threshold (default: 0.0)
+  * `--color-costar` / `--no-color-costar`: Render supporting actors in RGB scale (default: False)
+  * `--training-onfly` / `--no-training-onfly`: Train on the fly without pre-caching frames (default: False)
+
+### `labgym train detector`
+Headless training for Detectron2 object detection models.
+
+* **Syntax**:
+  ```bash
+  labgym train detector --config <file.yaml> [inline-overrides]
+  ```
+
+* **Required Parameters**:
+  * `--path-to-annotation` (`path_to_annotation`): Path to COCO JSON annotation file
+  * `--path-to-trainingimages` (`path_to_trainingimages`): Directory containing training images
+  * `--model-path` (`model_path`): Destination directory for the trained detector
+
+* **Key Options**:
+  * `--iteration-num` (`iteration_num`): Number of training iterations (default: 200)
+  * `--inference-size` (`inference_size`): Image frame resizing dimension for inference (default: 480)
+
+### `labgym test categorizer`
+Headless evaluation of a trained behavior classifier against ground-truth data.
+
+* **Syntax**:
+  ```bash
+  labgym test categorizer --config <file.yaml> [inline-overrides]
+  ```
+
+* **Required Parameters**:
+  * `--groundtruth-path` (`groundtruth_path`): Path to ground-truth testing dataset folder
+  * `--model-path` (`model_path`): Path to trained Categorizer directory
+
+* **Key Options**:
+  * `--result-path` (`result_path`): Directory to write evaluation metrics and confusion matrices
+
+### `labgym test detector`
+Headless evaluation of a trained object detector against annotated testing images.
+
+* **Syntax**:
+  ```bash
+  labgym test detector --config <file.yaml> [inline-overrides]
+  ```
+
+* **Required Parameters**:
+  * `--path-to-annotation` (`path_to_annotation`): Path to COCO JSON annotation file
+  * `--path-to-testingimages` (`path_to_testingimages`): Directory containing test images
+  * `--model-path` (`model_path`): Path to trained Detector directory
+
+* **Key Options**:
+  * `--result-path` (`result_path`): Directory to write detection test results
+
+### `labgym infer`
+Headless animal tracking and behavior classification on videos or static images.
+
+> **Model Metadata Inheritance**: Architecture hyperparameters (`dim_conv`, `dim_tconv`, `channel`, `time_step`) and preprocessing settings (`background_free`, `black_background`, `behavior_mode`, `social_distance`, `color_costar`) are authoritative inside the trained Categorizer model's `model_parameters.txt` and are inherited automatically during inference.
+
+* **Syntax**:
+  ```bash
+  labgym infer --config <file.yaml> [inline-overrides]
+  ```
+
+* **Required Parameters**:
+  * `--path-to-videos` (`path_to_videos`): One or more video file paths or directories
+  * `--result-path` (`result_path`): Directory to write tracking and classification results
+
+* **Model Selection**:
+  * `--path-to-categorizer` (`path_to_categorizer`): Path to trained Categorizer directory
+  * `--path-to-detector` (`path_to_detector`): Path to trained Detector directory
+  * `--use-detector` / `--no-use-detector`: Enable or disable detector-based tracking (default: False)
+
+* **Analysis Options**:
+  * `--framewidth` (`framewidth`): Target image resizing width in pixels
+  * `--background-path` (`background_path`): Path to background reference image (for background subtraction)
+  * `--delta` (`delta`): Delta trigger threshold (default: 10000.0)
+  * `--animal-kinds` (`animal_kinds`): List of animal categories recognized by the detector
+  * `--animal-to-include` (`animal_to_include`): Specific animals to include in output reports
+  * `--behavior-to-include` (`behavior_to_include`): Behaviors to quantify (default: `['all']`)
+  * `--detector-batch` (`detector_batch`): Batch size for detector processing (default: 1)
+  * `--detection-threshold` (`detection_threshold`): Detection confidence threshold 0.0–1.0 (default: 0.0)
+  * `--animal-number` (`animal_number`): Total animal count (integer) or video-to-count JSON mapping
+  * `--decode-animalnumber` / `--no-decode-animalnumber`: Extract animal counts from video filenames
+  * `--t` (`t`): Analysis start offset in seconds (default: 0.0)
+  * `--duration` (`duration`): Analysis duration in seconds (default: 0.0 = full video)
+  * `--decode-t` / `--no-decode-t`: Extract start time from video filenames
+  * `--ex-start` (`ex_start`): Extraction start frame number (default: 0)
+  * `--ex-end` (`ex_end`): Extraction end frame number
+  * `--decode-extraction` / `--no-decode-extraction`: Extract start/end frames from filenames
+  * `--stable-illumination` / `--no-stable-illumination`: Illumination stability flag (default: True)
+  * `--ID-colors` (`ID_colors`): List of RGB color tuples for animal IDs
+  * `--parameter-to-analyze` (`parameter_to_analyze`): Kinematic parameters to quantify
+  * `--uncertain` (`uncertain`): Probability difference gap for uncertainty threshold (default: 0.0)
+  * `--min-length` (`min_length`): Minimum behavior duration in frames
+  * `--show-legend` / `--no-show-legend`: Render behavior legends on output videos (default: True)
+  * `--normalize-distance` / `--no-normalize-distance`: Normalize distances by contour size (default: True)
+  * `--correct-id` / `--no-correct-id`: Apply ID correction heuristics (default: False)
+  * `--specific-behaviors` (`specific_behaviors`): Custom behavior definition mapping
+
+---
+
+## 3. Configuration YAML Examples
+
+### Categorizer Training (`train_categorizer.yaml`)
 ```yaml
-# Categorizer sub-network training
+# labgym train categorizer -c train_categorizer.yaml
+data_path: "~/data/behavior_examples"
+model_path: "~/models/categorizer_combnet"
 network_type: "combnet"
-data_path: "./prepared_dataset"
-model_path: "./models/my_new_categorizer"
-out_folder: "./cached_frames"
+out_path: "~/logs/categorizer_training"
 
-# Architecture hyperparameters
+# Architecture dimensions
 dim_conv: 64
 dim_tconv: 32
 channel: 1
@@ -131,7 +177,7 @@ time_step: 15
 level_conv: 2
 level_tconv: 1
 
-# Training parameters
+# Preprocessing & Augmentation
 training_onfly: false
 augvalid: true
 include_bodyparts: true
@@ -142,92 +188,69 @@ behavior_mode: 0
 social_distance: 0.0
 ```
 
-### `train_detector_config.yaml` (Detector Model Training)
+### Detector Training (`train_detector.yaml`)
 ```yaml
-# Detector training
-network_type: "detector"
-model_path: "./models/my_new_detector"
-
-# Dataset paths
-path_to_annotation: "./dataset/annotations.json"
-path_to_trainingimages: "./dataset/images"
-
-# Hyperparameters
+# labgym train detector -c train_detector.yaml
+path_to_annotation: "~/data/annotations/train_coco.json"
+path_to_trainingimages: "~/data/training_images"
+model_path: "~/models/detector_mouse"
 iteration_num: 1000
 inference_size: 480
 ```
 
-### `test_config.yaml` (Diagnostics & Triage Plan Generation)
+### Model Evaluation (`test_categorizer.yaml`)
 ```yaml
-# Headless testing parameters
-groundtruth_path: "./ground_truth_examples"
-model_path: "./models/my_new_categorizer"
-result_path: "./evaluation_results"
-
-# Triage Hypothesis mapping (Optional)
-# If left blank, all systematic major confusions automatically calculate
-# centroids and embed their reference captures directly.
-redundant:
-  - "behavior_jump -> behavior_leap"
-emergent:
-  - "behavior_groom -> behavior_scratch"
-generalization:
-  - "behavior_walk -> behavior_run"
+# labgym test categorizer -c test_categorizer.yaml
+groundtruth_path: "~/data/groundtruth_examples"
+model_path: "~/models/categorizer_combnet"
+result_path: "~/results/categorizer_eval"
 ```
 
-### `infer_config.yaml` (Behavior Tracking & Prediction)
+### Behavioral Inference (`infer.yaml`)
 ```yaml
-# Batch inference setup
+# labgym infer -c infer.yaml
 path_to_videos:
-  - "./raw_videos/video_batch_1"
-result_path: "./output_results"
-path_to_categorizer: "./models/my_new_categorizer"
+  - "~/videos/session_1.mp4"
+  - "~/videos/session_2.mp4"
+result_path: "~/results/inference_run_1"
 
-# Object Detection configs
+# Trained models
+path_to_categorizer: "~/models/categorizer_combnet"
+path_to_detector: "~/models/detector_mouse"
 use_detector: true
-path_to_detector: "./models/my_new_detector"
-detector_batch: 4
+
+# Run parameters
+detector_batch: 2
 animal_kinds:
   - "mouse"
-
-# Video properties decoding & constraints
-decode_animalnumber: true
-stable_illumination: true
-t: 0.0
-duration: 60.0
+duration: 120.0
+show_legend: true
+normalize_distance: true
 ```
 
 ---
 
-## 4. SLURM SBatch Execution Example
+## 4. High-Performance Computing (SLURM) Example
 
-Below is a baseline script configuration for submitting parallel parameters sweeping runs on SLURM clusters.
+Below is an example job script for submitting a headless training run on an HPC cluster:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=labgym_sweep
-#SBATCH --output=logs/labgym_%A_%a.out
-#SBATCH --error=logs/labgym_%A_%a.err
-#SBATCH --array=1-3
-#SBATCH --time=02:00:00
+#SBATCH --job-name=labgym_train
+#SBATCH --output=logs/labgym_%j.out
+#SBATCH --error=logs/labgym_%j.err
+#SBATCH --time=04:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
 
-# Load modules / Activate virtual env
 module load python/3.10
-source venv/bin/activate
+source ~/envs/labgym/bin/activate
 
-# Define configurations list for array jobs
-declare -A RATES
-RATES[1]=0.001
-RATES[2]=0.0005
-RATES[3]=0.0001
-
-LR=${RATES[$SLURM_ARRAY_TASK_ID]}
-
-# Execute using baseline config and inline parameter overrides
-labgym train \
-  --config baseline_train_config.yaml \
-  --model_path "./models/model_sweep_${SLURM_ARRAY_TASK_ID}" \
-  --learning_rate $LR
+labgym train categorizer \
+  --config train_categorizer.yaml \
+  --data-path ~/data/behavior_dataset \
+  --model-path ~/models/combnet_run \
+  --level-conv 3
 ```
