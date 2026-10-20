@@ -564,14 +564,32 @@ def handle_test_categorizer(args):
         config_path=args.config,
         cli_args_dict=vars(args)
     )
-    
-    if config['result_path']:
-        os.makedirs(config['result_path'], exist_ok=True)
-        
-    print(f"Starting headless Categorizer testing on '{config['groundtruth_path']}'...", file=sys.stdout)
+
+    groundtruth_path = config['groundtruth_path']
+    model_path = config['model_path']
+    result_path = config['result_path']
+
+    if not os.path.exists(groundtruth_path):
+        raise CLIConfigError(f"Ground-truth dataset directory not found: '{groundtruth_path}'")
+    if not os.path.isdir(groundtruth_path):
+        raise CLIConfigError(f"Ground-truth dataset path must be a directory: '{groundtruth_path}'")
+    if not os.path.exists(model_path):
+        raise CLIConfigError(f"Categorizer model directory not found: '{model_path}'")
+    if not os.path.isdir(model_path):
+        raise CLIConfigError(f"Categorizer model path must be a directory: '{model_path}'")
+    param_path = os.path.join(model_path, 'model_parameters.txt')
+    if not os.path.isfile(param_path):
+        raise CLIConfigError(
+            f"Categorizer model parameters file not found in '{model_path}'. Expected 'model_parameters.txt'."
+        )
+
+    if result_path:
+        os.makedirs(result_path, exist_ok=True)
+
+    print(f"Starting headless Categorizer testing on '{groundtruth_path}'...", file=sys.stdout)
     from LabGym.categorizer import Categorizers
     CA = Categorizers()
-    CA.test_categorizer(config['groundtruth_path'], config['model_path'], result_path=config['result_path'])
+    CA.test_categorizer(groundtruth_path, model_path, result_path=result_path)
     print("Categorizer testing completed successfully.", file=sys.stdout)
 
 
@@ -584,18 +602,36 @@ def handle_test_detector(args):
         config_path=args.config,
         cli_args_dict=vars(args)
     )
-    
-    if config['result_path']:
-        os.makedirs(config['result_path'], exist_ok=True)
-        
-    print(f"Starting headless Detector testing on '{config['path_to_testingimages']}'...", file=sys.stdout)
+
+    path_to_annotation = config['path_to_annotation']
+    path_to_testingimages = config['path_to_testingimages']
+    model_path = config['model_path']
+    result_path = config['result_path']
+
+    if not os.path.exists(path_to_annotation):
+        raise CLIConfigError(f"Annotation file not found: '{path_to_annotation}'")
+    if not os.path.isfile(path_to_annotation):
+        raise CLIConfigError(f"Annotation path must be a file: '{path_to_annotation}'")
+    if not os.path.exists(path_to_testingimages):
+        raise CLIConfigError(f"Testing images directory not found: '{path_to_testingimages}'")
+    if not os.path.isdir(path_to_testingimages):
+        raise CLIConfigError(f"Testing images path must be a directory: '{path_to_testingimages}'")
+    if not os.path.exists(model_path):
+        raise CLIConfigError(f"Detector model directory not found: '{model_path}'")
+    if not os.path.isdir(model_path):
+        raise CLIConfigError(f"Detector model path must be a directory: '{model_path}'")
+
+    if result_path:
+        os.makedirs(result_path, exist_ok=True)
+
+    print(f"Starting headless Detector testing on '{path_to_testingimages}'...", file=sys.stdout)
     from LabGym.detector import Detector
     DT = Detector()
     DT.test(
-        config['path_to_annotation'],
-        config['path_to_testingimages'],
-        config['model_path'],
-        config['result_path']
+        path_to_annotation,
+        path_to_testingimages,
+        model_path,
+        result_path
     )
     print("Detector testing completed successfully.", file=sys.stdout)
 
@@ -768,8 +804,13 @@ def load_detector_metadata(path_to_detector):
         raise CLIConfigError(
             f"Malformed Detector model parameters in '{param_path}': missing required field 'inferencing_framesize'."
         )
+    val = detector_dict['inferencing_framesize']
+    if isinstance(val, bool):
+        raise CLIConfigError(
+            f"Malformed Detector model parameters in '{param_path}': 'inferencing_framesize' cannot be a boolean."
+        )
     try:
-        inferencing_framesize = int(detector_dict['inferencing_framesize'])
+        inferencing_framesize = int(val)
     except (ValueError, TypeError):
         raise CLIConfigError(
             f"Malformed Detector model parameters in '{param_path}': 'inferencing_framesize' must be an integer."

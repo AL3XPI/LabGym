@@ -710,6 +710,12 @@ def test_load_detector_metadata(tmp_path):
         load_detector_metadata(str(bad_det))
     assert "'inferencing_framesize' must be a positive integer" in str(exc_info.value)
 
+    # Test boolean inferencing_framesize (JSON true)
+    (bad_det / "model_parameters.txt").write_text('{"animal_mapping": {"0": "mouse"}, "inferencing_framesize": true}')
+    with pytest.raises(CLIConfigError) as exc_info:
+        load_detector_metadata(str(bad_det))
+    assert "'inferencing_framesize' cannot be a boolean" in str(exc_info.value)
+
 
 def test_resolve_media_paths(tmp_path):
     v1 = tmp_path / "v1.mp4"
@@ -860,3 +866,85 @@ def test_path_to_videos_rejects_empty_strings():
             cli_args_dict={'path_to_videos': ['   '], 'result_path': 'out/'}
         )
     assert "Items in 'path_to_videos' must be non-empty string paths" in str(exc_info.value)
+
+
+def test_handle_test_categorizer_validation_and_execution(tmp_path, capsys):
+    gt_dir = tmp_path / "groundtruth"
+    gt_dir.mkdir()
+    cat_dir = tmp_path / "cat_model"
+    cat_dir.mkdir()
+    param_file = cat_dir / "model_parameters.txt"
+    param_file.write_text("classnames,dim_conv,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\ngroom,64,1,15,0,0,0,0,0,0,0,1\n")
+    out_dir = tmp_path / "test_cat_out"
+
+    # Missing groundtruth_path
+    exit_code = main(["test", "categorizer", "--groundtruth-path", str(tmp_path / "nonexistent"), "--model-path", str(cat_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Groundtruth_path is a file
+    dummy_file = tmp_path / "dummy_gt.txt"
+    dummy_file.write_text("file")
+    exit_code = main(["test", "categorizer", "--groundtruth-path", str(dummy_file), "--model-path", str(cat_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Missing model_path
+    exit_code = main(["test", "categorizer", "--groundtruth-path", str(gt_dir), "--model-path", str(tmp_path / "nonexistent_model"), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Model_path missing model_parameters.txt
+    empty_model = tmp_path / "empty_model"
+    empty_model.mkdir()
+    exit_code = main(["test", "categorizer", "--groundtruth-path", str(gt_dir), "--model-path", str(empty_model), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Successful run
+    with patch('LabGym.categorizer.Categorizers.test_categorizer') as mock_test:
+        exit_code = main(["test", "categorizer", "--groundtruth-path", str(gt_dir), "--model-path", str(cat_dir), "--result-path", str(out_dir)])
+        assert exit_code == 0
+        mock_test.assert_called_once_with(str(gt_dir), str(cat_dir), result_path=str(out_dir))
+        assert out_dir.exists()
+        captured = capsys.readouterr()
+        assert "Categorizer testing completed successfully." in captured.out
+
+
+def test_handle_test_detector_validation_and_execution(tmp_path, capsys):
+    anno_file = tmp_path / "annotations.json"
+    anno_file.write_text("{}")
+    img_dir = tmp_path / "test_images"
+    img_dir.mkdir()
+    det_dir = tmp_path / "det_model"
+    det_dir.mkdir()
+    out_dir = tmp_path / "test_det_out"
+
+    # Missing path_to_annotation
+    exit_code = main(["test", "detector", "--path-to-annotation", str(tmp_path / "ghost.json"), "--path-to-testingimages", str(img_dir), "--model-path", str(det_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Annotation path is directory
+    exit_code = main(["test", "detector", "--path-to-annotation", str(img_dir), "--path-to-testingimages", str(img_dir), "--model-path", str(det_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Missing path_to_testingimages
+    exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(tmp_path / "ghost_imgs"), "--model-path", str(det_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Missing model_path
+    exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(img_dir), "--model-path", str(tmp_path / "ghost_model"), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Successful run
+    with patch('LabGym.detector.Detector.test') as mock_test:
+        exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(img_dir), "--model-path", str(det_dir), "--result-path", str(out_dir)])
+        assert exit_code == 0
+        mock_test.assert_called_once_with(str(anno_file), str(img_dir), str(det_dir), str(out_dir))
+        assert out_dir.exists()
+        captured = capsys.readouterr()
+        assert "Detector testing completed successfully." in captured.out
