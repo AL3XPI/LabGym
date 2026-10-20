@@ -55,10 +55,8 @@ TEST_CATEGORIZER_DEFAULTS = {
 REQUIRED_TEST_CATEGORIZER_KEYS = {'groundtruth_path', 'model_path'}
 ALLOWED_TEST_CATEGORIZER_KEYS = set(TEST_CATEGORIZER_DEFAULTS.keys()) | REQUIRED_TEST_CATEGORIZER_KEYS
 
-TEST_DETECTOR_DEFAULTS = {
-    'result_path': None,
-}
-REQUIRED_TEST_DETECTOR_KEYS = {'path_to_annotation', 'path_to_testingimages', 'model_path'}
+TEST_DETECTOR_DEFAULTS = {}
+REQUIRED_TEST_DETECTOR_KEYS = {'path_to_annotation', 'path_to_testingimages', 'model_path', 'result_path'}
 ALLOWED_TEST_DETECTOR_KEYS = set(TEST_DETECTOR_DEFAULTS.keys()) | REQUIRED_TEST_DETECTOR_KEYS
 
 INFER_DEFAULTS = {
@@ -583,6 +581,23 @@ def handle_test_categorizer(args):
             f"Categorizer model parameters file not found in '{model_path}'. Expected 'model_parameters.txt'."
         )
 
+    import pandas as pd
+    try:
+        parameters = pd.read_csv(param_path)
+    except Exception as e:
+        raise CLIConfigError(f"Error reading Categorizer model parameters in '{param_path}': {e}")
+
+    required_cat_test_fields = ['classnames', 'time_step', 'network', 'inner_code', 'background_free']
+    for field in required_cat_test_fields:
+        if field not in parameters or len(parameters[field]) == 0 or pd.isna(parameters[field][0]):
+            raise CLIConfigError(
+                f"Malformed Categorizer model parameters in '{param_path}': missing required field '{field}'."
+            )
+
+    classnames = [str(x) for x in list(parameters['classnames']) if pd.notna(x)]
+    if not classnames:
+        raise CLIConfigError(f"Malformed Categorizer model parameters in '{param_path}': 'classnames' is empty.")
+
     if result_path:
         os.makedirs(result_path, exist_ok=True)
 
@@ -621,8 +636,15 @@ def handle_test_detector(args):
     if not os.path.isdir(model_path):
         raise CLIConfigError(f"Detector model path must be a directory: '{model_path}'")
 
-    if result_path:
-        os.makedirs(result_path, exist_ok=True)
+    required_detector_files = ['model_parameters.txt', 'config.yaml', 'model_final.pth']
+    for req_file in required_detector_files:
+        fpath = os.path.join(model_path, req_file)
+        if not os.path.isfile(fpath):
+            raise CLIConfigError(
+                f"Detector model directory '{model_path}' is missing required file: '{req_file}'."
+            )
+
+    os.makedirs(result_path, exist_ok=True)
 
     print(f"Starting headless Detector testing on '{path_to_testingimages}'...", file=sys.stdout)
     from LabGym.detector import Detector

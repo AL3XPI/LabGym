@@ -107,8 +107,6 @@ Headless evaluation of a trained object detector against annotated testing image
   * `--path-to-annotation` (`path_to_annotation`): Path to COCO JSON annotation file
   * `--path-to-testingimages` (`path_to_testingimages`): Directory containing test images
   * `--model-path` (`model_path`): Path to trained Detector directory
-
-* **Key Options**:
   * `--result-path` (`result_path`): Directory to write detection test results
 
 ### `labgym infer`
@@ -204,6 +202,15 @@ inference_size: 480
 groundtruth_path: "~/data/groundtruth_examples"
 model_path: "~/models/categorizer_combnet"
 result_path: "~/results/categorizer_eval"
+```
+
+### Detector Evaluation (`test_detector.yaml`)
+```yaml
+# labgym test detector -c test_detector.yaml
+path_to_annotation: "~/data/annotations/test_coco.json"
+path_to_testingimages: "~/data/test_images"
+model_path: "~/models/detector_mouse"
+result_path: "~/results/detector_eval"
 ```
 
 ### Behavioral Inference (`infer.yaml`)

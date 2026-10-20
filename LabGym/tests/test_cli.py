@@ -901,6 +901,22 @@ def test_handle_test_categorizer_validation_and_execution(tmp_path, capsys):
     assert exit_code == 2
     assert not out_dir.exists()
 
+    # model_parameters.txt missing required field (e.g. time_step)
+    bad_param_dir = tmp_path / "bad_param_model"
+    bad_param_dir.mkdir()
+    (bad_param_dir / "model_parameters.txt").write_text("classnames,network,inner_code,background_free\ngroom,0,0,0\n")
+    exit_code = main(["test", "categorizer", "--groundtruth-path", str(gt_dir), "--model-path", str(bad_param_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # model_parameters.txt missing classnames
+    missing_classes_dir = tmp_path / "missing_classes_model"
+    missing_classes_dir.mkdir()
+    (missing_classes_dir / "model_parameters.txt").write_text("time_step,network,inner_code,background_free\n15,0,0,0\n")
+    exit_code = main(["test", "categorizer", "--groundtruth-path", str(gt_dir), "--model-path", str(missing_classes_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
     # Successful run
     with patch('LabGym.categorizer.Categorizers.test_categorizer') as mock_test:
         exit_code = main(["test", "categorizer", "--groundtruth-path", str(gt_dir), "--model-path", str(cat_dir), "--result-path", str(out_dir)])
@@ -918,7 +934,14 @@ def test_handle_test_detector_validation_and_execution(tmp_path, capsys):
     img_dir.mkdir()
     det_dir = tmp_path / "det_model"
     det_dir.mkdir()
+    (det_dir / "model_parameters.txt").write_text('{"animal_mapping": {"0": "mouse"}, "inferencing_framesize": 480}')
+    (det_dir / "config.yaml").write_text("MODEL:\n  DEVICE: cpu\n")
+    (det_dir / "model_final.pth").write_text("weights")
     out_dir = tmp_path / "test_det_out"
+
+    # Missing required result-path
+    exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(img_dir), "--model-path", str(det_dir)])
+    assert exit_code == 2
 
     # Missing path_to_annotation
     exit_code = main(["test", "detector", "--path-to-annotation", str(tmp_path / "ghost.json"), "--path-to-testingimages", str(img_dir), "--model-path", str(det_dir), "--result-path", str(out_dir)])
@@ -937,6 +960,33 @@ def test_handle_test_detector_validation_and_execution(tmp_path, capsys):
 
     # Missing model_path
     exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(img_dir), "--model-path", str(tmp_path / "ghost_model"), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Detector model directory missing config.yaml
+    missing_config_dir = tmp_path / "missing_config_det"
+    missing_config_dir.mkdir()
+    (missing_config_dir / "model_parameters.txt").write_text("{}")
+    (missing_config_dir / "model_final.pth").write_text("weights")
+    exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(img_dir), "--model-path", str(missing_config_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Detector model directory missing model_final.pth
+    missing_pth_dir = tmp_path / "missing_pth_det"
+    missing_pth_dir.mkdir()
+    (missing_pth_dir / "model_parameters.txt").write_text("{}")
+    (missing_pth_dir / "config.yaml").write_text("cfg")
+    exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(img_dir), "--model-path", str(missing_pth_dir), "--result-path", str(out_dir)])
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+    # Detector model directory missing model_parameters.txt
+    missing_param_dir = tmp_path / "missing_param_det"
+    missing_param_dir.mkdir()
+    (missing_param_dir / "config.yaml").write_text("cfg")
+    (missing_param_dir / "model_final.pth").write_text("weights")
+    exit_code = main(["test", "detector", "--path-to-annotation", str(anno_file), "--path-to-testingimages", str(img_dir), "--model-path", str(missing_param_dir), "--result-path", str(out_dir)])
     assert exit_code == 2
     assert not out_dir.exists()
 
