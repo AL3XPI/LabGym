@@ -636,13 +636,28 @@ def handle_test_detector(args):
     if not os.path.isdir(model_path):
         raise CLIConfigError(f"Detector model path must be a directory: '{model_path}'")
 
-    required_detector_files = ['model_parameters.txt', 'config.yaml', 'model_final.pth']
-    for req_file in required_detector_files:
-        fpath = os.path.join(model_path, req_file)
+    for text_file in ['model_parameters.txt', 'config.yaml']:
+        fpath = os.path.join(model_path, text_file)
         if not os.path.isfile(fpath):
             raise CLIConfigError(
-                f"Detector model directory '{model_path}' is missing required file: '{req_file}'."
+                f"Detector model directory '{model_path}' is missing required file: '{text_file}'."
             )
+        try:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                f.read()
+        except Exception as e:
+            raise CLIConfigError(f"Error reading Detector model file '{fpath}': {e}")
+
+    weights_file = os.path.join(model_path, 'model_final.pth')
+    if not os.path.isfile(weights_file):
+        raise CLIConfigError(
+            f"Detector model directory '{model_path}' is missing required file: 'model_final.pth'."
+        )
+    try:
+        with open(weights_file, 'rb') as f:
+            f.read(1024)
+    except Exception as e:
+        raise CLIConfigError(f"Error reading Detector model file '{weights_file}': {e}")
 
     os.makedirs(result_path, exist_ok=True)
 

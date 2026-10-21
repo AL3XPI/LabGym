@@ -998,3 +998,69 @@ def test_handle_test_detector_validation_and_execution(tmp_path, capsys):
         assert out_dir.exists()
         captured = capsys.readouterr()
         assert "Detector testing completed successfully." in captured.out
+
+
+def test_handle_test_detector_unreadable_file_fails_without_creating_out_dir(tmp_path):
+    anno_file = tmp_path / "annotations.json"
+    anno_file.write_text("{}")
+    img_dir = tmp_path / "test_images"
+    img_dir.mkdir()
+    det_dir = tmp_path / "det_model"
+    det_dir.mkdir()
+    (det_dir / "model_parameters.txt").write_text('{"animal_mapping": {"0": "mouse"}, "inferencing_framesize": 480}')
+    (det_dir / "config.yaml").write_text("MODEL:\n  DEVICE: cpu\n")
+    (det_dir / "model_final.pth").write_text("weights")
+    out_dir = tmp_path / "test_det_out_unreadable"
+
+    orig_open = open
+
+    # Simulate read failure on model_final.pth (binary read)
+    def mock_open_weights(file, *args, **kwargs):
+        if str(file).endswith("model_final.pth"):
+            raise PermissionError("Permission denied: unreadable weights")
+        return orig_open(file, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=mock_open_weights):
+        exit_code = main([
+            "test", "detector",
+            "--path-to-annotation", str(anno_file),
+            "--path-to-testingimages", str(img_dir),
+            "--model-path", str(det_dir),
+            "--result-path", str(out_dir)
+        ])
+        assert exit_code == 2
+        assert not out_dir.exists()
+
+    # Simulate read failure on config.yaml (text read)
+    def mock_open_config(file, *args, **kwargs):
+        if str(file).endswith("config.yaml"):
+            raise OSError("I/O error reading config")
+        return orig_open(file, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=mock_open_config):
+        exit_code = main([
+            "test", "detector",
+            "--path-to-annotation", str(anno_file),
+            "--path-to-testingimages", str(img_dir),
+            "--model-path", str(det_dir),
+            "--result-path", str(out_dir)
+        ])
+        assert exit_code == 2
+        assert not out_dir.exists()
+
+    # Simulate read failure on model_parameters.txt (text read)
+    def mock_open_params(file, *args, **kwargs):
+        if str(file).endswith("model_parameters.txt"):
+            raise PermissionError("Permission denied: unreadable model parameters")
+        return orig_open(file, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=mock_open_params):
+        exit_code = main([
+            "test", "detector",
+            "--path-to-annotation", str(anno_file),
+            "--path-to-testingimages", str(img_dir),
+            "--model-path", str(det_dir),
+            "--result-path", str(out_dir)
+        ])
+        assert exit_code == 2
+        assert not out_dir.exists()
