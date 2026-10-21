@@ -42,6 +42,24 @@ TRAIN_CATEGORIZER_DEFAULTS = {
 REQUIRED_TRAIN_CATEGORIZER_KEYS = {'data_path', 'model_path'}
 ALLOWED_TRAIN_CATEGORIZER_KEYS = set(TRAIN_CATEGORIZER_DEFAULTS.keys()) | REQUIRED_TRAIN_CATEGORIZER_KEYS
 
+AUG_METHOD_MAP = {
+    'random rotation': 'random rotation',
+    'horizontal flipping': 'horizontal flipping',
+    'vertical flipping': 'vertical flipping',
+    'random brightening': 'random brightening',
+    'random dimming': 'random dimming',
+    'random shearing': 'random shearing',
+    'random rescaling': 'random rescaling',
+    'random deletion': 'random deletion',
+    'rotation': 'random rotation',
+    'flipping': 'horizontal flipping',
+    'brightening': 'random brightening',
+    'dimming': 'random dimming',
+    'shearing': 'random shearing',
+    'rescaling': 'random rescaling',
+    'deletion': 'random deletion',
+}
+
 TRAIN_DETECTOR_DEFAULTS = {
     'iteration_num': 200,
     'inference_size': 480,
@@ -210,6 +228,13 @@ def validate_types_and_ranges(command_name, config):
                     raise CLIConfigError(
                         f"Items in '{key}' for '{command_name}' must be strings (got {item!r})."
                     )
+
+    if 'aug_methods' in config and config['aug_methods'] is not None:
+        for item in config['aug_methods']:
+            if item not in AUG_METHOD_MAP:
+                raise CLIConfigError(
+                    f"Invalid augmentation method '{item}'. Choose from: {sorted(set(AUG_METHOD_MAP.values()))}."
+                )
 
     float_keys = ['std', 'social_distance', 't', 'duration', 'delta']
     for key in float_keys:
@@ -452,20 +477,47 @@ def handle_train_categorizer(args):
         config_path=args.config,
         cli_args_dict=vars(args)
     )
-    
-    os.makedirs(config['model_path'], exist_ok=True)
+
+    data_path = config['data_path']
+    model_path = config['model_path']
+    out_path = config.get('out_path')
+    out_folder = config.get('out_folder')
+
+    if not os.path.exists(data_path):
+        raise CLIConfigError(f"Training data directory not found: '{data_path}'")
+    if not os.path.isdir(data_path):
+        raise CLIConfigError(f"Training data path must be a directory: '{data_path}'")
+
+    if os.path.isfile(model_path):
+        raise CLIConfigError(f"Model path must be a directory, not an existing file: '{model_path}'")
+
+    if out_path and os.path.isfile(out_path):
+        raise CLIConfigError(f"Output path must be a directory, not an existing file: '{out_path}'")
+
+    if out_folder and os.path.isfile(out_folder):
+        raise CLIConfigError(f"Output folder must be a directory, not an existing file: '{out_folder}'")
+
+    if config.get('aug_methods'):
+        config['aug_methods'] = [AUG_METHOD_MAP[m] for m in config['aug_methods']]
+
+    os.makedirs(model_path, exist_ok=True)
+    if out_path:
+        os.makedirs(out_path, exist_ok=True)
+    if out_folder:
+        os.makedirs(out_folder, exist_ok=True)
+
     print(f"Starting headless Categorizer training ({config['network_type']})...", file=sys.stdout)
-    
+
     from LabGym.categorizer import Categorizers
     CA = Categorizers()
-    
+
     net_type = config['network_type']
     onfly = config['training_onfly']
-    
+
     if net_type == 'pattern_recognizer':
         if onfly:
             CA.train_pattern_recognizer_onfly(
-                config['data_path'], config['model_path'], out_path=config['out_path'],
+                data_path, model_path, out_path=out_path,
                 dim=config['dim_conv'], channel=config['channel'], time_step=config['time_step'],
                 level=config['level_conv'], include_bodyparts=config['include_bodyparts'],
                 std=config['std'], background_free=config['background_free'],
@@ -474,18 +526,18 @@ def handle_train_categorizer(args):
             )
         else:
             CA.train_pattern_recognizer(
-                config['data_path'], config['model_path'], out_path=config['out_path'],
+                data_path, model_path, out_path=out_path,
                 dim=config['dim_conv'], channel=config['channel'], time_step=config['time_step'],
                 level=config['level_conv'], aug_methods=config['aug_methods'], augvalid=config['augvalid'],
                 include_bodyparts=config['include_bodyparts'], std=config['std'],
                 background_free=config['background_free'], black_background=config['black_background'],
                 behavior_mode=config['behavior_mode'], social_distance=config['social_distance'],
-                out_folder=config['out_folder']
+                out_folder=out_folder
             )
     elif net_type == 'animation_analyzer':
         if onfly:
             CA.train_animation_analyzer_onfly(
-                config['data_path'], config['model_path'], out_path=config['out_path'],
+                data_path, model_path, out_path=out_path,
                 dim=config['dim_tconv'], channel=config['channel'], time_step=config['time_step'],
                 level=config['level_tconv'], include_bodyparts=config['include_bodyparts'],
                 std=config['std'], background_free=config['background_free'],
@@ -494,18 +546,18 @@ def handle_train_categorizer(args):
             )
         else:
             CA.train_animation_analyzer(
-                config['data_path'], config['model_path'], out_path=config['out_path'],
+                data_path, model_path, out_path=out_path,
                 dim=config['dim_tconv'], channel=config['channel'], time_step=config['time_step'],
                 level=config['level_tconv'], aug_methods=config['aug_methods'], augvalid=config['augvalid'],
                 include_bodyparts=config['include_bodyparts'], std=config['std'],
                 background_free=config['background_free'], black_background=config['black_background'],
                 behavior_mode=config['behavior_mode'], social_distance=config['social_distance'],
-                color_costar=config['color_costar'], out_folder=config['out_folder']
+                color_costar=config['color_costar'], out_folder=out_folder
             )
     else:
         if onfly:
             CA.train_combnet_onfly(
-                config['data_path'], config['model_path'], out_path=config['out_path'],
+                data_path, model_path, out_path=out_path,
                 dim_tconv=config['dim_tconv'], dim_conv=config['dim_conv'], channel=config['channel'],
                 time_step=config['time_step'], level_tconv=config['level_tconv'], level_conv=config['level_conv'],
                 include_bodyparts=config['include_bodyparts'], std=config['std'],
@@ -515,16 +567,16 @@ def handle_train_categorizer(args):
             )
         else:
             CA.train_combnet(
-                config['data_path'], config['model_path'], out_path=config['out_path'],
+                data_path, model_path, out_path=out_path,
                 dim_tconv=config['dim_tconv'], dim_conv=config['dim_conv'], channel=config['channel'],
                 time_step=config['time_step'], level_tconv=config['level_tconv'], level_conv=config['level_conv'],
                 aug_methods=config['aug_methods'], augvalid=config['augvalid'],
                 include_bodyparts=config['include_bodyparts'], std=config['std'],
                 background_free=config['background_free'], black_background=config['black_background'],
                 behavior_mode=config['behavior_mode'], social_distance=config['social_distance'],
-                color_costar=config['color_costar'], out_folder=config['out_folder']
+                color_costar=config['color_costar'], out_folder=out_folder
             )
-            
+
     print("Categorizer training completed successfully.", file=sys.stdout)
 
 
@@ -537,16 +589,55 @@ def handle_train_detector(args):
         config_path=args.config,
         cli_args_dict=vars(args)
     )
-    
-    os.makedirs(config['model_path'], exist_ok=True)
-    print(f"Starting headless Detector training (Iterations: {config['iteration_num']}, Inference Size: {config['inference_size']})...", file=sys.stdout)
-    
+
+    path_to_annotation = config['path_to_annotation']
+    path_to_trainingimages = config['path_to_trainingimages']
+    model_path = config['model_path']
+
+    if not os.path.exists(path_to_annotation):
+        raise CLIConfigError(f"Annotation file not found: '{path_to_annotation}'")
+    if not os.path.isfile(path_to_annotation):
+        raise CLIConfigError(f"Annotation path must be a file: '{path_to_annotation}'")
+
+    try:
+        with open(path_to_annotation, 'r', encoding='utf-8') as f:
+            anno_data = json.load(f)
+    except Exception as e:
+        raise CLIConfigError(f"Error reading annotation file '{path_to_annotation}': {e}")
+
+    if not isinstance(anno_data, dict) or 'categories' not in anno_data or not isinstance(anno_data['categories'], list):
+        raise CLIConfigError(
+            f"Annotation file '{path_to_annotation}' must contain a valid COCO 'categories' list."
+        )
+
+    if not os.path.exists(path_to_trainingimages):
+        raise CLIConfigError(f"Training images directory not found: '{path_to_trainingimages}'")
+    if not os.path.isdir(path_to_trainingimages):
+        raise CLIConfigError(f"Training images path must be a directory: '{path_to_trainingimages}'")
+
+    if os.path.isfile(model_path):
+        raise CLIConfigError(f"Model path must be a directory, not an existing file: '{model_path}'")
+
+    if os.path.exists(model_path):
+        raise CLIConfigError(
+            f"Model directory already exists: '{model_path}'. Detector training requires a path to a new directory."
+        )
+
+    parent_dir = os.path.dirname(model_path)
+    if parent_dir and os.path.isfile(parent_dir):
+        raise CLIConfigError(f"Parent path of model directory is a file: '{parent_dir}'")
+
+    print(
+        f"Starting headless Detector training (Iterations: {config['iteration_num']}, Inference Size: {config['inference_size']})...",
+        file=sys.stdout
+    )
+
     from LabGym.detector import Detector
     DT = Detector()
     DT.train(
-        config['path_to_annotation'],
-        config['path_to_trainingimages'],
-        config['model_path'],
+        path_to_annotation,
+        path_to_trainingimages,
+        model_path,
         config['iteration_num'],
         config['inference_size']
     )

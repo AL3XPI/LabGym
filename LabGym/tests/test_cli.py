@@ -1064,3 +1064,271 @@ def test_handle_test_detector_unreadable_file_fails_without_creating_out_dir(tmp
         ])
         assert exit_code == 2
         assert not out_dir.exists()
+
+
+def test_handle_train_categorizer_validation_and_execution(tmp_path, capsys):
+    data_dir = tmp_path / "behavior_data"
+    data_dir.mkdir()
+    model_dir = tmp_path / "cat_model"
+    dummy_file = tmp_path / "dummy.txt"
+    dummy_file.write_text("file")
+
+    # Missing data_path
+    exit_code = main(["train", "categorizer", "--data-path", str(tmp_path / "nonexistent_data"), "--model-path", str(model_dir)])
+    assert exit_code == 2
+    assert not model_dir.exists()
+
+    # data_path is a file, not a directory
+    exit_code = main(["train", "categorizer", "--data-path", str(dummy_file), "--model-path", str(model_dir)])
+    assert exit_code == 2
+    assert not model_dir.exists()
+
+    # model_path is an existing file
+    exit_code = main(["train", "categorizer", "--data-path", str(data_dir), "--model-path", str(dummy_file)])
+    assert exit_code == 2
+
+    # out_path is an existing file
+    exit_code = main(["train", "categorizer", "--data-path", str(data_dir), "--model-path", str(model_dir), "--out-path", str(dummy_file)])
+    assert exit_code == 2
+    assert not model_dir.exists()
+
+    # out_folder is an existing file
+    exit_code = main(["train", "categorizer", "--data-path", str(data_dir), "--model-path", str(model_dir), "--out-folder", str(dummy_file)])
+    assert exit_code == 2
+    assert not model_dir.exists()
+
+    # Invalid aug_methods
+    exit_code = main(["train", "categorizer", "--data-path", str(data_dir), "--model-path", str(model_dir), "--aug-methods", "bad_aug"])
+    assert exit_code == 2
+    assert not model_dir.exists()
+
+    # Successful combnet training
+    out_path = tmp_path / "reports"
+    with patch('LabGym.categorizer.Categorizers.train_combnet') as mock_train:
+        exit_code = main([
+            "train", "categorizer",
+            "--data-path", str(data_dir),
+            "--model-path", str(model_dir),
+            "--out-path", str(out_path),
+            "--network-type", "combnet",
+            "--aug-methods", "rotation", "vertical flipping"
+        ])
+        assert exit_code == 0
+        assert model_dir.exists()
+        assert out_path.exists()
+        mock_train.assert_called_once()
+        _, kwargs = mock_train.call_args
+        assert kwargs['aug_methods'] == ['random rotation', 'vertical flipping']
+        captured = capsys.readouterr()
+        assert "Categorizer training completed successfully." in captured.out
+
+
+def test_handle_train_categorizer_network_dispatch(tmp_path):
+    data_dir = tmp_path / "behavior_data"
+    data_dir.mkdir()
+    model_dir = tmp_path / "cat_model"
+
+    # Pattern recognizer
+    with patch('LabGym.categorizer.Categorizers.train_pattern_recognizer') as mock_pr:
+        exit_code = main([
+            "train", "categorizer",
+            "--data-path", str(data_dir),
+            "--model-path", str(model_dir),
+            "--network-type", "pattern_recognizer"
+        ])
+        assert exit_code == 0
+        mock_pr.assert_called_once()
+
+    # Pattern recognizer on-the-fly
+    with patch('LabGym.categorizer.Categorizers.train_pattern_recognizer_onfly') as mock_pr_onfly:
+        exit_code = main([
+            "train", "categorizer",
+            "--data-path", str(data_dir),
+            "--model-path", str(model_dir),
+            "--network-type", "pattern_recognizer",
+            "--training-onfly"
+        ])
+        assert exit_code == 0
+        mock_pr_onfly.assert_called_once()
+
+    # Animation analyzer
+    with patch('LabGym.categorizer.Categorizers.train_animation_analyzer') as mock_aa:
+        exit_code = main([
+            "train", "categorizer",
+            "--data-path", str(data_dir),
+            "--model-path", str(model_dir),
+            "--network-type", "animation_analyzer"
+        ])
+        assert exit_code == 0
+        mock_aa.assert_called_once()
+
+    # Animation analyzer on-the-fly
+    with patch('LabGym.categorizer.Categorizers.train_animation_analyzer_onfly') as mock_aa_onfly:
+        exit_code = main([
+            "train", "categorizer",
+            "--data-path", str(data_dir),
+            "--model-path", str(model_dir),
+            "--network-type", "animation_analyzer",
+            "--training-onfly"
+        ])
+        assert exit_code == 0
+        mock_aa_onfly.assert_called_once()
+
+    # Combnet on-the-fly
+    with patch('LabGym.categorizer.Categorizers.train_combnet_onfly') as mock_cb_onfly:
+        exit_code = main([
+            "train", "categorizer",
+            "--data-path", str(data_dir),
+            "--model-path", str(model_dir),
+            "--network-type", "combnet",
+            "--training-onfly"
+        ])
+        assert exit_code == 0
+        mock_cb_onfly.assert_called_once()
+
+
+def test_handle_train_detector_validation_and_execution(tmp_path, capsys):
+    anno_file = tmp_path / "annotations.json"
+    anno_file.write_text(json.dumps({"categories": [{"id": 1, "name": "mouse"}]}))
+    img_dir = tmp_path / "train_images"
+    img_dir.mkdir()
+    det_dir = tmp_path / "det_model"
+    dummy_file = tmp_path / "dummy.txt"
+    dummy_file.write_text("dummy")
+
+    # Missing path_to_annotation
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(tmp_path / "nonexistent.json"),
+        "--path-to-trainingimages", str(img_dir),
+        "--model-path", str(det_dir)
+    ])
+    assert exit_code == 2
+    assert not det_dir.exists()
+
+    # path_to_annotation is directory
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(img_dir),
+        "--path-to-trainingimages", str(img_dir),
+        "--model-path", str(det_dir)
+    ])
+    assert exit_code == 2
+    assert not det_dir.exists()
+
+    # path_to_annotation is invalid JSON
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("invalid json")
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(bad_json),
+        "--path-to-trainingimages", str(img_dir),
+        "--model-path", str(det_dir)
+    ])
+    assert exit_code == 2
+    assert not det_dir.exists()
+
+    # path_to_annotation missing 'categories' list
+    no_cat_json = tmp_path / "no_cat.json"
+    no_cat_json.write_text(json.dumps({"images": []}))
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(no_cat_json),
+        "--path-to-trainingimages", str(img_dir),
+        "--model-path", str(det_dir)
+    ])
+    assert exit_code == 2
+    assert not det_dir.exists()
+
+    # Missing path_to_trainingimages
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(anno_file),
+        "--path-to-trainingimages", str(tmp_path / "nonexistent_imgs"),
+        "--model-path", str(det_dir)
+    ])
+    assert exit_code == 2
+    assert not det_dir.exists()
+
+    # path_to_trainingimages is a file
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(anno_file),
+        "--path-to-trainingimages", str(dummy_file),
+        "--model-path", str(det_dir)
+    ])
+    assert exit_code == 2
+    assert not det_dir.exists()
+
+    # model_path is an existing file
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(anno_file),
+        "--path-to-trainingimages", str(img_dir),
+        "--model-path", str(dummy_file)
+    ])
+    assert exit_code == 2
+
+    # model_path already exists as a directory
+    existing_dir = tmp_path / "existing_det"
+    existing_dir.mkdir()
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(anno_file),
+        "--path-to-trainingimages", str(img_dir),
+        "--model-path", str(existing_dir)
+    ])
+    assert exit_code == 2
+
+    # Parent directory of model_path is a file
+    file_parent = tmp_path / "file_parent"
+    file_parent.write_text("file")
+    exit_code = main([
+        "train", "detector",
+        "--path-to-annotation", str(anno_file),
+        "--path-to-trainingimages", str(img_dir),
+        "--model-path", str(file_parent / "det_model")
+    ])
+    assert exit_code == 2
+
+    # Successful detector training run
+    with patch('LabGym.detector.Detector.train') as mock_train:
+        exit_code = main([
+            "train", "detector",
+            "--path-to-annotation", str(anno_file),
+            "--path-to-trainingimages", str(img_dir),
+            "--model-path", str(det_dir),
+            "--iteration-num", "500",
+            "--inference-size", "600"
+        ])
+        assert exit_code == 0
+        mock_train.assert_called_once_with(
+            str(anno_file), str(img_dir), str(det_dir), 500, 600
+        )
+        captured = capsys.readouterr()
+        assert "Detector training completed successfully." in captured.out
+
+
+def test_train_rejects_irrelevant_cross_command_parameters(tmp_path):
+    # Reject detector-only params in categorizer training
+    cfg_cat = tmp_path / "cat_bad.yaml"
+    with open(cfg_cat, "w") as f:
+        yaml.dump({
+            'data_path': str(tmp_path),
+            'model_path': str(tmp_path / 'model'),
+            'path_to_annotation': 'anno.json'
+        }, f)
+    exit_code = main(["train", "categorizer", "-c", str(cfg_cat)])
+    assert exit_code == 2
+
+    # Reject categorizer-only params in detector training
+    cfg_det = tmp_path / "det_bad.yaml"
+    with open(cfg_det, "w") as f:
+        yaml.dump({
+            'path_to_annotation': 'anno.json',
+            'path_to_trainingimages': str(tmp_path),
+            'model_path': str(tmp_path / 'model'),
+            'data_path': str(tmp_path)
+        }, f)
+    exit_code = main(["train", "detector", "-c", str(cfg_det)])
+    assert exit_code == 2

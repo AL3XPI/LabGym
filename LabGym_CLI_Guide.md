@@ -53,7 +53,7 @@ Headless training for behavior classification sub-networks (Pattern Recognizer, 
   * `--time-step` (`time_step`): Frames per behavioral sequence (default: 15)
   * `--level-conv` (`level_conv`): Complexity level for Pattern Recognizer 1–5 (default: 2)
   * `--level-tconv` (`level_tconv`): Complexity level for Animation Analyzer 1–5 (default: 1)
-  * `--aug-methods` (`aug_methods`): List of augmentation methods (e.g. `rotate`, `flip`)
+  * `--aug-methods` (`aug_methods`): List of augmentation methods (e.g. `"random rotation"`, `"horizontal flipping"`)
   * `--augvalid` / `--no-augvalid`: Validate augmentation data (default: True)
   * `--include-bodyparts` / `--no-include-bodyparts`: Include body part contours (default: True)
   * `--background-free` / `--no-background-free`: Exclude background from calculations (default: True)
