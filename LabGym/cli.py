@@ -288,6 +288,30 @@ def validate_types_and_ranges(command_name, config):
                 f"Parameter 'animal_number' must be a positive integer, dictionary, or string (got {val!r})."
             )
 
+    if command_name == "labgym train categorizer":
+        net_type = config.get('network_type', 'combnet')
+        if config.get('training_onfly'):
+            if config.get('aug_methods'):
+                raise CLIConfigError(
+                    "On-the-fly training ('training_onfly') does not support augmentation settings ('aug_methods')."
+                )
+            if config.get('augvalid') is False:
+                raise CLIConfigError(
+                    "On-the-fly training ('training_onfly') does not support '--no-augvalid' / 'augvalid: false'."
+                )
+            if config.get('out_folder') is not None:
+                raise CLIConfigError(
+                    "On-the-fly training ('training_onfly') does not support caching frames to 'out_folder'."
+                )
+        if net_type == 'pattern_recognizer' and config.get('color_costar'):
+            raise CLIConfigError(
+                "Option '--color-costar' / 'color_costar' is not supported for 'pattern_recognizer'."
+            )
+        if config.get('behavior_mode', 0) >= 3 and net_type != 'pattern_recognizer':
+            raise CLIConfigError(
+                f"behavior_mode={config['behavior_mode']} (static images) is only supported when network_type is 'pattern_recognizer' (got '{net_type}')."
+            )
+
 
 def resolve_config(command_name, defaults, allowed_keys, required_keys, config_path, cli_args_dict):
     """Resolve config from defaults, YAML file, and CLI overrides."""
@@ -488,6 +512,24 @@ def handle_train_categorizer(args):
     if not os.path.isdir(data_path):
         raise CLIConfigError(f"Training data path must be a directory: '{data_path}'")
 
+    if config.get('training_onfly'):
+        train_sub = os.path.join(data_path, 'train')
+        val_sub = os.path.join(data_path, 'validation')
+        if not os.path.isdir(train_sub) or not os.path.isdir(val_sub):
+            raise CLIConfigError(
+                f"On-the-fly training requires both 'train' and 'validation' subdirectories in '{data_path}'."
+            )
+    else:
+        valid_exts = {'.jpg', '.jpeg', '.png', '.tiff', '.bmp'}
+        found_images = [
+            f for f in os.listdir(data_path)
+            if os.path.splitext(f)[1].lower() in valid_exts and os.path.isfile(os.path.join(data_path, f))
+        ]
+        if not found_images:
+            raise CLIConfigError(
+                f"No supported image files found in '{data_path}'. Supported extensions: {', '.join(sorted(valid_exts))}."
+            )
+
     if os.path.isfile(model_path):
         raise CLIConfigError(f"Model path must be a directory, not an existing file: '{model_path}'")
 
@@ -605,9 +647,44 @@ def handle_train_detector(args):
     except Exception as e:
         raise CLIConfigError(f"Error reading annotation file '{path_to_annotation}': {e}")
 
-    if not isinstance(anno_data, dict) or 'categories' not in anno_data or not isinstance(anno_data['categories'], list):
+    if not isinstance(anno_data, dict):
+        raise CLIConfigError(f"Annotation file '{path_to_annotation}' must contain a JSON object.")
+
+    if 'images' not in anno_data or not isinstance(anno_data['images'], list):
         raise CLIConfigError(
-            f"Annotation file '{path_to_annotation}' must contain a valid COCO 'categories' list."
+            f"Annotation file '{path_to_annotation}' must contain an 'images' list."
+        )
+
+    if 'annotations' not in anno_data or not isinstance(anno_data['annotations'], list):
+        raise CLIConfigError(
+            f"Annotation file '{path_to_annotation}' must contain an 'annotations' list."
+        )
+
+    if 'categories' not in anno_data or not isinstance(anno_data['categories'], list) or len(anno_data['categories']) == 0:
+        raise CLIConfigError(
+            f"Annotation file '{path_to_annotation}' must contain a non-empty 'categories' list."
+        )
+
+    has_positive_id = False
+    for idx, cat in enumerate(anno_data['categories']):
+        if not isinstance(cat, dict):
+            raise CLIConfigError(
+                f"Item {idx} in 'categories' of '{path_to_annotation}' must be a dictionary."
+            )
+        if 'id' not in cat or isinstance(cat['id'], bool) or not isinstance(cat['id'], int):
+            raise CLIConfigError(
+                f"Category item {idx} in '{path_to_annotation}' must have an integer 'id' (got {cat.get('id')!r})."
+            )
+        if 'name' not in cat or isinstance(cat['name'], bool) or not isinstance(cat['name'], str) or not cat['name'].strip():
+            raise CLIConfigError(
+                f"Category item {idx} in '{path_to_annotation}' must have a non-empty string 'name'."
+            )
+        if cat['id'] > 0:
+            has_positive_id = True
+
+    if not has_positive_id:
+        raise CLIConfigError(
+            f"Annotation file '{path_to_annotation}' must contain at least one category with 'id' > 0."
         )
 
     if not os.path.exists(path_to_trainingimages):
