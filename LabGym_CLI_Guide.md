@@ -27,6 +27,12 @@ $$\text{Built-in Defaults} \quad\longrightarrow\quad \text{Workflow YAML } (\tex
 * Paired Boolean flags (e.g. `--use-detector` and `--no-use-detector`) allow explicit override in either direction while preserving YAML defaults when omitted.
 * CLI options use kebab-case (`--data-path`), mapping directly to snake_case (`data_path`) in YAML and Python.
 
+### Workflow Configuration vs. Persistent Application Preferences
+The `--config` / `-c` flag specifies a **per-command workflow (job) configuration file** written in YAML.
+
+* **Workflow Configuration (`--config`)**: A job-specific, hermetic YAML document defining the exact parameters, inputs, models, and outputs for a single headless execution. It is designed for reproducible scripted runs, automated analysis pipelines, and cluster submissions.
+* **Persistent Application Preferences**: LabGym GUI settings or system-level preferences stored across sessions are **not** loaded, modified, or referenced by the headless CLI. The CLI operates completely independently of persistent GUI state, relying solely on built-in command defaults, the specified workflow YAML file, and explicit command-line flags.
+
 ---
 
 ## 2. Command Reference
@@ -56,6 +62,7 @@ Headless training for behavior classification sub-networks (Pattern Recognizer, 
   * `--aug-methods` (`aug_methods`): List of augmentation methods (e.g. `"random rotation"`, `"horizontal flipping"`)
   * `--augvalid` / `--no-augvalid`: Validate augmentation data (default: True)
   * `--include-bodyparts` / `--no-include-bodyparts`: Include body part contours (default: True)
+  * `--std` (`std`): Standard deviation threshold parameter for body parts (default: 0.0)
   * `--background-free` / `--no-background-free`: Exclude background from calculations (default: True)
   * `--black-background` / `--no-black-background`: Use black background (default: True)
   * `--behavior-mode` (`behavior_mode`): Mode 0 (standard), 1 (basic interactive), 2 (advanced interactive), 3 (static images)
@@ -139,6 +146,7 @@ Headless animal tracking and behavior classification on videos or static images.
   * `--detection-threshold` (`detection_threshold`): Detection confidence threshold 0.0–1.0 (default: 0.0)
   * `--animal-number` (`animal_number`): Total animal count (integer) or video-to-count JSON mapping
   * `--decode-animalnumber` / `--no-decode-animalnumber`: Extract animal counts from video filenames
+  * `--autofind-t` / `--no-autofind-t`: Automatically detect optical stimulation trigger start time (default: False)
   * `--t` (`t`): Analysis start offset in seconds (default: 0.0)
   * `--duration` (`duration`): Analysis duration in seconds (default: 0.0 = full video)
   * `--decode-t` / `--no-decode-t`: Extract start time from video filenames
@@ -261,3 +269,16 @@ labgym train categorizer \
   --model-path ~/models/combnet_run \
   --level-conv 3
 ```
+
+---
+
+## 5. Exit Codes & Output Streams
+
+The LabGym CLI adheres to POSIX process exit conventions:
+
+* **Exit Code `0`**: Workflow succeeded.
+* **Exit Code `1`**: Runtime scientific execution failure (e.g. underlying computation or model exception).
+* **Exit Code `2`**: Configuration, syntax, or validation error (e.g. missing/unreadable YAML file, unknown keys, invalid types, out-of-range bounds, incompatible parameter combinations, or missing required arguments).
+* **Standard Output (`stdout`)**: Informational human-readable workflow progress and success confirmations.
+* **Standard Error (`stderr`)**: Error messages, validation diagnostics, and command-line usage help.
+

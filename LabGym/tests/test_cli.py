@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import pytest
 import yaml
@@ -1443,3 +1444,180 @@ def test_train_rejects_irrelevant_cross_command_parameters(tmp_path):
         }, f)
     exit_code = main(["train", "detector", "-c", str(cfg_det)])
     assert exit_code == 2
+
+
+def test_animal_number_scalar_and_structured_types_and_validation():
+    cli_args = {'animal_number': '2'}
+    res = resolve_config("labgym infer", INFER_DEFAULTS, ALLOWED_INFER_KEYS, set(), None, cli_args)
+    assert res['animal_number'] == 2
+    assert isinstance(res['animal_number'], int)
+
+    cli_args = {'animal_number': 5}
+    res = resolve_config("labgym infer", INFER_DEFAULTS, ALLOWED_INFER_KEYS, set(), None, cli_args)
+    assert res['animal_number'] == 5
+    assert isinstance(res['animal_number'], int)
+
+    cli_args = {'animal_number': '{"mouse": 2, "fly": 1}'}
+    res = resolve_config("labgym infer", INFER_DEFAULTS, ALLOWED_INFER_KEYS, set(), None, cli_args)
+    assert res['animal_number'] == {"mouse": 2, "fly": 1}
+    assert isinstance(res['animal_number'], dict)
+
+    cli_args = {'animal_number': {"mouse": 3}}
+    res = resolve_config("labgym infer", INFER_DEFAULTS, ALLOWED_INFER_KEYS, set(), None, cli_args)
+    assert res['animal_number'] == {"mouse": 3}
+    assert isinstance(res['animal_number'], dict)
+
+    invalid_inputs = [
+        True,
+        False,
+        0,
+        -1,
+        "0",
+        "-5",
+        "abc",
+        {"mouse": 0},
+        {"mouse": -1},
+        {"mouse": True},
+        {"mouse": "two"},
+        [1, 2],
+    ]
+    for bad_val in invalid_inputs:
+        with pytest.raises(CLIConfigError):
+            resolve_config("labgym infer", INFER_DEFAULTS, ALLOWED_INFER_KEYS, set(), None, {'animal_number': bad_val})
+
+
+def test_headless_smoke_workflow_train_test_infer(tmp_path, capsys):
+    cat_train_data = tmp_path / "cat_data"
+    cat_train_data.mkdir()
+    (cat_train_data / "train1.jpg").write_bytes(b"image")
+    cat_model_dir = tmp_path / "trained_cat"
+
+    det_imgs_dir = tmp_path / "det_imgs"
+    det_imgs_dir.mkdir()
+    (det_imgs_dir / "img1.png").write_bytes(b"image")
+    det_anno = tmp_path / "det_train.json"
+    det_anno.write_text(json.dumps({
+        "categories": [{"id": 1, "name": "mouse"}],
+        "images": [{"id": 1, "file_name": "img1.png"}],
+        "annotations": []
+    }))
+    det_model_dir = tmp_path / "trained_det"
+
+    cat_gt_dir = tmp_path / "cat_gt"
+    cat_gt_dir.mkdir()
+    det_test_imgs = tmp_path / "det_test_imgs"
+    det_test_imgs.mkdir()
+    det_test_anno = tmp_path / "det_test.json"
+    det_test_anno.write_text(json.dumps({
+        "categories": [{"id": 1, "name": "mouse"}],
+        "images": [{"id": 1, "file_name": "test1.png"}],
+        "annotations": []
+    }))
+
+    video_file = tmp_path / "video.mp4"
+    video_file.write_bytes(b"video")
+    infer_out = tmp_path / "infer_results"
+
+    cat_meta_content = (
+        "classnames,dim_conv,channel,time_step,network,inner_code,std,background_free,black_background,behavior_kind,social_distance,color_code\n"
+        "walk,64,1,15,0,0,0,0,0,0,0,1\n"
+    )
+
+    def fake_train_cat(*args, **kwargs):
+        cat_model_dir.mkdir(parents=True, exist_ok=True)
+        (cat_model_dir / "model_parameters.txt").write_text(cat_meta_content)
+
+    with patch('LabGym.categorizer.Categorizers.train_combnet', side_effect=fake_train_cat):
+        code = main([
+            "train", "categorizer",
+            "--data-path", str(cat_train_data),
+            "--model-path", str(cat_model_dir)
+        ])
+        assert code == 0
+        captured = capsys.readouterr()
+        assert "Categorizer training completed successfully." in captured.out
+
+    def fake_train_det(*args, **kwargs):
+        det_model_dir.mkdir(parents=True, exist_ok=True)
+        (det_model_dir / "model_parameters.txt").write_text(json.dumps({"animal_mapping": {"0": "mouse"}, "inferencing_framesize": 480}))
+        (det_model_dir / "config.yaml").write_text("MODEL:\n  DEVICE: cpu\n")
+        (det_model_dir / "model_final.pth").write_bytes(b"pth")
+
+    with patch('LabGym.detector.Detector.train', side_effect=fake_train_det):
+        code = main([
+            "train", "detector",
+            "--path-to-annotation", str(det_anno),
+            "--path-to-trainingimages", str(det_imgs_dir),
+            "--model-path", str(det_model_dir)
+        ])
+        assert code == 0
+        captured = capsys.readouterr()
+        assert "Detector training completed successfully." in captured.out
+
+    with patch('LabGym.categorizer.Categorizers.test_categorizer') as mock_test_cat:
+        code = main([
+            "test", "categorizer",
+            "--groundtruth-path", str(cat_gt_dir),
+            "--model-path", str(cat_model_dir),
+            "--result-path", str(tmp_path / "cat_eval")
+        ])
+        assert code == 0
+        mock_test_cat.assert_called_once()
+        captured = capsys.readouterr()
+        assert "Categorizer testing completed successfully." in captured.out
+
+    with patch('LabGym.detector.Detector.test') as mock_test_det:
+        code = main([
+            "test", "detector",
+            "--path-to-annotation", str(det_test_anno),
+            "--path-to-testingimages", str(det_test_imgs),
+            "--model-path", str(det_model_dir),
+            "--result-path", str(tmp_path / "det_eval")
+        ])
+        assert code == 0
+        mock_test_det.assert_called_once()
+        captured = capsys.readouterr()
+        assert "Detector testing completed successfully." in captured.out
+
+    with patch('LabGym.analyzebehavior_dt.AnalyzeAnimalDetector') as mock_aad_cls:
+        instance = MagicMock()
+        instance.event_probability = {}
+        instance.all_time = []
+        mock_aad_cls.return_value = instance
+
+        code = main([
+            "infer",
+            "--path-to-videos", str(video_file),
+            "--result-path", str(infer_out),
+            "--path-to-categorizer", str(cat_model_dir),
+            "--path-to-detector", str(det_model_dir),
+            "--use-detector"
+        ])
+        assert code == 0
+        instance.prepare_analysis.assert_called_once()
+        captured = capsys.readouterr()
+        assert "Inference completed successfully." in captured.out
+
+
+def test_cli_subprocess_headless_execution():
+    cmd = [
+        sys.executable,
+        "-c",
+        "import sys, subprocess; "
+        "res = subprocess.run([sys.executable, '-m', 'LabGym.cli', '--help'], capture_output=True, text=True); "
+        "sys.exit(0 if (res.returncode == 0 and 'LabGym CLI' in res.stdout) else 1)"
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    assert proc.returncode == 0
+
+    no_wx_cmd = [
+        sys.executable,
+        "-c",
+        "from LabGym import cli; import sys; "
+        "p = cli.build_parser(); "
+        "p.parse_args(['train', 'categorizer', '--data-path', 'd', '--model-path', 'm']); "
+        "sys.exit(0 if 'wx' not in sys.modules else 1)"
+    ]
+    proc_wx = subprocess.run(no_wx_cmd, capture_output=True, text=True)
+    assert proc_wx.returncode == 0
+

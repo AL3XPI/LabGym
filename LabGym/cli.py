@@ -283,9 +283,24 @@ def validate_types_and_ranges(command_name, config):
 
     if 'animal_number' in config and config['animal_number'] is not None:
         val = config['animal_number']
-        if isinstance(val, bool) or (isinstance(val, int) and val <= 0):
+        if isinstance(val, bool):
             raise CLIConfigError(
-                f"Parameter 'animal_number' must be a positive integer, dictionary, or string (got {val!r})."
+                f"Parameter 'animal_number' must be a positive integer or dictionary (got {val!r})."
+            )
+        if isinstance(val, int):
+            if val <= 0:
+                raise CLIConfigError(
+                    f"Parameter 'animal_number' must be a positive integer (got {val!r})."
+                )
+        elif isinstance(val, dict):
+            for k, v in val.items():
+                if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+                    raise CLIConfigError(
+                        f"Animal counts in 'animal_number' dictionary must be positive integers (got {v!r} for '{k}')."
+                    )
+        else:
+            raise CLIConfigError(
+                f"Parameter 'animal_number' must be a positive integer or dictionary (got {type(val).__name__}: {val!r})."
             )
 
     if command_name == "labgym train categorizer":
@@ -369,7 +384,14 @@ def resolve_config(command_name, defaults, allowed_keys, required_keys, config_p
     if 'ID_colors' in resolved and isinstance(resolved['ID_colors'], str):
         resolved['ID_colors'] = parse_json_or_val(resolved['ID_colors'])
     if 'animal_number' in resolved and isinstance(resolved['animal_number'], str):
-        resolved['animal_number'] = parse_json_or_val(resolved['animal_number'])
+        val_str = resolved['animal_number'].strip()
+        if val_str.startswith('{') or val_str.startswith('['):
+            resolved['animal_number'] = parse_json_or_val(val_str)
+        else:
+            try:
+                resolved['animal_number'] = int(val_str)
+            except ValueError:
+                pass
 
     validate_types_and_ranges(command_name, resolved)
 
