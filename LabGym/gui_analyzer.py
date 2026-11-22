@@ -40,6 +40,7 @@ import wx
 # Local application/library specific imports.
 from .analyzebehavior import AnalyzeAnimal
 from .analyzebehavior_dt import AnalyzeAnimalDetector
+from .detector import DetectorReuse
 from LabGym import config
 from .minedata import data_mining
 from .tools import (
@@ -981,6 +982,10 @@ class PanelLv2_AnalyzeBehaviors(wx.Panel):
 					if self.behavior_to_include[0]=='all':
 						self.behavior_to_include=list(self.behaviornames_and_colors.keys())
 
+				detector_options={}
+				if self.use_detector and self.behavior_mode==0 and self.path_to_categorizer is not None and len(self.path_to_videos)>1:
+					detector_options['detector_reuse']=DetectorReuse()
+
 				for i in self.path_to_videos:
 
 					filename=os.path.splitext(os.path.basename(i))[0].split('_')
@@ -1054,7 +1059,7 @@ class PanelLv2_AnalyzeBehaviors(wx.Panel):
 						AAD.prepare_analysis(self.path_to_detector,i,self.result_path,self.animal_number,self.animal_kinds,self.behavior_mode,
 							names_and_colors=self.behaviornames_and_colors,framewidth=self.framewidth,dim_tconv=self.dim_tconv,dim_conv=self.dim_conv,channel=self.channel,
 							include_bodyparts=self.include_bodyparts,std=self.std,categorize_behavior=categorize_behavior,animation_analyzer=self.animation_analyzer,
-							t=self.t,duration=self.duration,length=self.length,social_distance=self.social_distance)
+							t=self.t,duration=self.duration,length=self.length,social_distance=self.social_distance,**detector_options)
 						if self.behavior_mode==1:
 							AAD.acquire_information_interact_basic(batch_size=self.detector_batch,background_free=self.background_free,black_background=self.black_background)
 						else:

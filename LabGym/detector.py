@@ -38,6 +38,32 @@ import torch
 # (none)
 
 
+class DetectorReuse:
+
+	def __init__(self):
+		self._key=None
+		self._detector=None
+
+	def load(self,path_to_detector,animal_kinds):
+		"""Reuse the previous model only within this analysis run."""
+
+		path=os.path.realpath(path_to_detector)
+		candidate=Detector()
+		config=candidate.inference_config(path_to_detector)
+		artifacts=[]
+		for filename in ('model_final.pth','model_parameters.txt'):
+			stat=os.stat(os.path.join(path,filename))
+			artifacts.append((stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns))
+		key=(path,candidate.device,tuple(animal_kinds),config.dump(),tuple(artifacts))
+		if key!=self._key:
+			self._key=None
+			self._detector=None
+			candidate.load(path_to_detector,animal_kinds,config=config)
+			self._detector=candidate
+			self._key=key
+		return self._detector
+
+
 class Detector():
 
 	def __init__(self):
@@ -182,11 +208,19 @@ class Detector():
 		print('Detector testing completed!')
 
 
-	def load(self,path_to_detector,animal_kinds):
+	def inference_config(self,path_to_detector):
+
+		cfg=get_cfg()
+		cfg.set_new_allowed(True)
+		cfg.merge_from_file(os.path.join(path_to_detector,'config.yaml'))
+		cfg.MODEL.DEVICE=self.device
+		return cfg
+
+
+	def load(self,path_to_detector,animal_kinds,*,config=None):
 
 		# animal_kinds: the catgories of animals / objects to be analyzed
 
-		config=os.path.join(path_to_detector,'config.yaml')
 		detector_model=os.path.join(path_to_detector,'model_final.pth')
 		animalmapping=os.path.join(path_to_detector,'model_parameters.txt')
 		with open(animalmapping) as f:
@@ -199,10 +233,7 @@ class Detector():
 		print('The animals / objects of interest in this Detector: '+str(animal_kinds))
 		print('The inferencing framesize of this Detector: '+str(dt_infersize))
 
-		cfg=get_cfg()
-		cfg.set_new_allowed(True)
-		cfg.merge_from_file(config)
-		cfg.MODEL.DEVICE=self.device
+		cfg=self.inference_config(path_to_detector) if config is None else config
 		self.current_detector=build_model(cfg)
 		DetectionCheckpointer(self.current_detector).load(detector_model)
 		self.current_detector.eval()

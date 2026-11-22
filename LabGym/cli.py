@@ -1257,6 +1257,10 @@ def handle_infer(args):
             detector_batch = max(1, config['detector_batch'])
 
         categorize_behavior = (path_to_categorizer is not None)
+        detector_options = {}
+        if use_detector and behavior_mode == 0 and categorize_behavior and len(input_paths) > 1:
+            from LabGym.detector import DetectorReuse
+            detector_options['detector_reuse'] = DetectorReuse()
 
         for video_path in input_paths:
             filename = os.path.splitext(os.path.basename(video_path))[0].split('_')
@@ -1347,7 +1351,8 @@ def handle_infer(args):
                     dim_tconv=cat_meta['dim_tconv'], dim_conv=cat_meta['dim_conv'], channel=cat_meta['channel'],
                     include_bodyparts=cat_meta['include_bodyparts'], std=cat_meta['std'],
                     categorize_behavior=categorize_behavior, animation_analyzer=cat_meta['animation_analyzer'],
-                    t=t_val, duration=config['duration'], length=cat_meta['length'], social_distance=cat_meta['social_distance']
+                    t=t_val, duration=config['duration'], length=cat_meta['length'], social_distance=cat_meta['social_distance'],
+                    **detector_options
                 )
                 if behavior_mode == 1:
                     AAD.acquire_information_interact_basic(

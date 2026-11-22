@@ -130,7 +130,8 @@ class AnalyzeAnimalDetector():
 		t=0, # start time point
 		duration=5, # the duration for example generation / analysis
 		length=15, # the duration (number of frames) of a behavior example (a behavior episode)
-		social_distance=0 # the distance to determine which two animals / objects form a interactive pair / group
+		social_distance=0, # the distance to determine which two animals / objects form a interactive pair / group
+		detector_reuse=None,
 		):
 
 		print('Preparation started...')
@@ -138,8 +139,11 @@ class AnalyzeAnimalDetector():
 		print(datetime.datetime.now())
 		self.log.append(str(datetime.datetime.now()))
 
-		self.detector=Detector()
-		self.detector.load(path_to_detector,animal_kinds)
+		if detector_reuse is None:
+			self.detector=Detector()
+			self.detector.load(path_to_detector,animal_kinds)
+		else:
+			self.detector=detector_reuse.load(path_to_detector,animal_kinds)
 		self.animal_mapping=self.detector.animal_mapping
 		self.path_to_video=path_to_video
 		self.basename=os.path.basename(self.path_to_video)
