@@ -61,6 +61,8 @@ from .tools import (
 
 class AnalyzeAnimalDetector():
 
+	CATEGORIZER_CHUNK_SIZE=32
+
 	def __init__(self):
 
 		self.behavior_mode=0
@@ -103,6 +105,11 @@ class AnalyzeAnimalDetector():
 		self.animal_blobs={}
 		self.animations={}
 		self.pattern_images={}
+		self._incremental_categorizer=None
+		self._categorizer_model=None
+		self._categorizer_uncertain=0
+		self._pending_windows=[]
+		self._frame_patterns={}
 		self.event_probability={}
 		self.all_behavior_parameters={}
 		self.animal_present={}
@@ -130,7 +137,9 @@ class AnalyzeAnimalDetector():
 		t=0, # start time point
 		duration=5, # the duration for example generation / analysis
 		length=15, # the duration (number of frames) of a behavior example (a behavior episode)
-		social_distance=0 # the distance to determine which two animals / objects form a interactive pair / group
+		social_distance=0, # the distance to determine which two animals / objects form a interactive pair / group
+		incremental_categorizer=None,
+		categorizer_uncertain=0,
 		):
 
 		print('Preparation started...')
@@ -155,6 +164,9 @@ class AnalyzeAnimalDetector():
 		self.std=std
 		self.categorize_behavior=categorize_behavior
 		self.animation_analyzer=animation_analyzer
+		if behavior_mode==0 and categorize_behavior:
+			self._incremental_categorizer=incremental_categorizer
+		self._categorizer_uncertain=categorizer_uncertain
 		self.t=t
 		self.duration=duration
 		self.length=length
@@ -222,7 +234,7 @@ class AnalyzeAnimalDetector():
 				self.animal_inners[animal_name]={}
 				if self.behavior_mode==2:
 					self.animal_other_inners[animal_name]={}
-			if self.animation_analyzer:
+			if self.animation_analyzer and not self._incremental_categorizer:
 				self.animal_blobs[animal_name]={}
 				self.animations[animal_name]={}
 			for i in range(self.animal_number[animal_name]):
@@ -238,10 +250,13 @@ class AnalyzeAnimalDetector():
 					self.animal_inners[animal_name][i]=deque(maxlen=self.length)
 					if self.behavior_mode==2:
 						self.animal_other_inners[animal_name][i]=deque(maxlen=self.length)
-				if self.animation_analyzer:
+				if self.animation_analyzer and not self._incremental_categorizer:
 					self.animal_blobs[animal_name][i]=deque([np.zeros((self.dim_tconv,self.dim_tconv,self.channel),dtype='uint8')],maxlen=self.length)*self.length
 					self.animations[animal_name][i]=[np.zeros((self.length,self.dim_tconv,self.dim_tconv,self.channel),dtype='uint8')]*self.total_analysis_framecount
-				self.pattern_images[animal_name][i]=[np.zeros((self.dim_conv,self.dim_conv,3),dtype='uint8')]*self.total_analysis_framecount
+				if self._incremental_categorizer:
+					self._initialize_track_predictions(animal_name,i,self.total_analysis_framecount)
+				else:
+					self.pattern_images[animal_name][i]=[np.zeros((self.dim_conv,self.dim_conv,3),dtype='uint8')]*self.total_analysis_framecount
 			self.animal_present[animal_name]=0
 
 		if framesize/total_number<250:
@@ -295,7 +310,11 @@ class AnalyzeAnimalDetector():
 					else:
 						pattern_image=generate_patternimage(self.background,self.animal_contours[animal_name][index_in_existing][max(0,(frame_count_analyze-self.length+1)):frame_count_analyze+1],inners=None,std=0)
 					pattern_image=cv2.resize(pattern_image,(self.dim_conv,self.dim_conv),interpolation=cv2.INTER_AREA)
-					self.pattern_images[animal_name][index_in_existing][frame_count_analyze]=np.array(pattern_image)
+					if self._incremental_categorizer:
+						if self._eligible_window(animal_name,index_in_existing,frame_count_analyze):
+							self._frame_patterns[index_in_existing]=pattern_image
+					else:
+						self.pattern_images[animal_name][index_in_existing][frame_count_analyze]=np.array(pattern_image)
 
 		if len(unused_existing_indices)>0:
 			for i in unused_existing_indices:
@@ -485,19 +504,32 @@ class AnalyzeAnimalDetector():
 									masked_frame=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)*mask
 									inners.append(get_inner(masked_frame,cnt))
 
-							self.track_animal(frame_count_analyze+1-batch_size+batch_count,animal_name,contours,centers,heights,inners=inners)
+							frame_index=frame_count_analyze+1-batch_size+batch_count
+							self.track_animal(frame_index,animal_name,contours,centers,heights,inners=inners)
 
 							if self.animation_analyzer:
 								for i in self.animal_centers[animal_name]:
+									# An eligible window fills the entire animation deque, so its
+									# pixels do not depend on an earlier, unused animation.
+									if self._incremental_categorizer and i not in self._frame_patterns:
+										continue
+									window=self.animal_contours[animal_name][i][max(0,frame_index-self.length+1):frame_index+1]
 									for n,f in enumerate(self.temp_frames):
-										contour=self.animal_contours[animal_name][i][max(0,frame_count_analyze+1-batch_size+batch_count-self.length+1):frame_count_analyze+1-batch_size+batch_count+1][n]
+										contour=window[n]
 										if contour is None:
 											blob=np.zeros((self.dim_tconv,self.dim_tconv,self.channel),dtype='uint8')
 										else:
-											blob=extract_blob_background(f,self.animal_contours[animal_name][i][max(0,frame_count_analyze+1-batch_size+batch_count-self.length+1):frame_count_analyze+1-batch_size+batch_count+1],contour=contour,channel=self.channel,background_free=background_free,black_background=black_background)
+											blob=extract_blob_background(f,window,contour=contour,channel=self.channel,background_free=background_free,black_background=black_background)
 											blob=cv2.resize(blob,(self.dim_tconv,self.dim_tconv),interpolation=cv2.INTER_AREA)
 										animation.append(img_to_array(blob))
-									self.animations[animal_name][i][frame_count_analyze+1-batch_size+batch_count]=np.array(animation)
+									if self._incremental_categorizer:
+										self._queue_window(animal_name,i,frame_index,self._frame_patterns.pop(i),np.array(animation))
+									else:
+										self.animations[animal_name][i][frame_index]=np.array(animation)
+							elif self._incremental_categorizer:
+								for i in self.animal_centers[animal_name]:
+									if i in self._frame_patterns:
+										self._queue_window(animal_name,i,frame_index,self._frame_patterns.pop(i))
 
 
 	def detect_track_interact(self,frames,batch_size,frame_count_analyze,background_free=True,black_background=True,color_costar=False):
@@ -695,6 +727,8 @@ class AnalyzeAnimalDetector():
 		# background_free: whether to include background in animations
 		# black_background: whether to set background black
 		# color_costar: in 'interactive advanced' mode, whether to make the supporting roles RGB scale in animations
+		if self._incremental_categorizer and batch_size!=1:
+			raise ValueError('Incremental categorization requires Detector batch_size=1.')
 
 		print('Acquiring information in each frame...')
 		self.log.append('Acquiring information in each frame...')
@@ -975,34 +1009,105 @@ class AnalyzeAnimalDetector():
 						if self.behavior_mode==2:
 							del self.animal_other_inners[animal_name][i]
 					if self.animation_analyzer:
-						del self.animal_blobs[animal_name][i]
+						if not self._incremental_categorizer:
+							del self.animal_blobs[animal_name][i]
+					if self._incremental_categorizer:
+						del self.event_probability[animal_name][i]
+						for parameters in self.all_behavior_parameters[animal_name].values():
+							del parameters['probability'][i]
+					else:
 						del self.animations[animal_name][i]
-					del self.pattern_images[animal_name][i]
+						del self.pattern_images[animal_name][i]
 
 			for i in self.animal_centers[animal_name]:
 				self.animal_centers[animal_name][i]=self.animal_centers[animal_name][i][:length]
 				self.animal_contours[animal_name][i]=self.animal_contours[animal_name][i][:length]
 				self.animal_heights[animal_name][i]=self.animal_heights[animal_name][i][:length]
-				if self.animation_analyzer:
-					self.animations[animal_name][i]=self.animations[animal_name][i][:length]
-				self.pattern_images[animal_name][i]=self.pattern_images[animal_name][i][:length]
+				if self._incremental_categorizer:
+					self.event_probability[animal_name][i]=self.event_probability[animal_name][i][:length]
+					for parameters in self.all_behavior_parameters[animal_name].values():
+						parameters['probability'][i]=parameters['probability'][i][:length]
+				else:
+					if self.animation_analyzer:
+						self.animations[animal_name][i]=self.animations[animal_name][i][:length]
+					self.pattern_images[animal_name][i]=self.pattern_images[animal_name][i][:length]
 
 		print('Data crafting completed!')
 		self.log.append('Data crafting completed!')
 
 
-	def categorize_behaviors(self,path_to_categorizer,uncertain=0,min_length=None):
+	def _initialize_track_predictions(self,animal_name,track_id,length):
 
-		# path_to_categorizer: path to the Categorizer
-		# uncertain: a threshold between the highest the 2nd highest probability of behaviors to determine if output an 'NA' in behavior classification
-		# min_length: the minimum length (in frames) a behavior should last, can be used to filter out the brief false positives
+		self.event_probability[animal_name][track_id]=[['NA',-1]]*length
+		for parameters in self.all_behavior_parameters[animal_name].values():
+			parameters['probability'][track_id]=[np.nan]*length
 
-		print('Categorizing behaviors...')
-		self.log.append('Categorizing behaviors...')
-		print(datetime.datetime.now())
-		self.log.append(str(datetime.datetime.now()))
 
-		categorizer=load_model(path_to_categorizer)
+	def _eligible_window(self,animal_name,track_id,frame_index):
+
+		registered=self.register_counts[animal_name][track_id]
+		if registered is None or frame_index<self.length+registered:
+			return False
+		contours=self.animal_contours[animal_name][track_id]
+		return (contours[frame_index] is not None
+			and sum(c is None for c in contours[frame_index-self.length+1:frame_index+1])<=self.length/2)
+
+
+	def _predict_windows(self,categorizer,patterns,animations=None):
+
+		with tf.device('CPU'):
+			if animations is not None:
+				animations=tf.convert_to_tensor(np.array(animations,dtype='float32')/255.0)
+			patterns=tf.convert_to_tensor(np.array(patterns,dtype='float32')/255.0)
+		inputs=[animations,patterns] if animations is not None else patterns
+		return categorizer.predict(inputs,batch_size=32)
+
+
+	def _assign_window_prediction(self,animal_name,track_id,frame_index,prediction,uncertain):
+
+		parameters=self.all_behavior_parameters[animal_name]
+		names=list(parameters)
+		if len(names)==2:
+			positive=prediction[0]
+			negative=1-positive
+			parameters[names[0]]['probability'][track_id][frame_index]=negative
+			parameters[names[1]]['probability'][track_id][frame_index]=positive
+			if positive>0.5 and positive-negative>uncertain:
+				self.event_probability[animal_name][track_id][frame_index]=[names[1],positive]
+			if positive<0.5 and negative-positive>uncertain:
+				self.event_probability[animal_name][track_id][frame_index]=[names[0],negative]
+		else:
+			for index,behavior_name in enumerate(names):
+				parameters[behavior_name]['probability'][track_id][frame_index]=prediction[index]
+			ordered=sorted(prediction)
+			if ordered[-1]-ordered[-2]>uncertain:
+				self.event_probability[animal_name][track_id][frame_index]=[names[np.argmax(prediction)],max(prediction)]
+
+
+	def _queue_window(self,animal_name,track_id,frame_index,pattern,animation=None):
+
+		self._pending_windows.append((animal_name,track_id,frame_index,pattern,animation))
+		if len(self._pending_windows)==self.CATEGORIZER_CHUNK_SIZE:
+			self._consume_windows()
+
+
+	def _consume_windows(self):
+
+		if not self._pending_windows:
+			return
+		if self._categorizer_model is None:
+			self._categorizer_model=load_model(self._incremental_categorizer)
+		patterns=[window[3] for window in self._pending_windows]
+		animations=[window[4] for window in self._pending_windows] if self.animation_analyzer else None
+		predictions=self._predict_windows(self._categorizer_model,patterns,animations)
+		if len(predictions)!=len(self._pending_windows):
+			raise ValueError('The Categorizer must return one prediction per window.')
+		for (animal_name,track_id,frame_index,_,_),prediction in zip(self._pending_windows,predictions):
+			self._assign_window_prediction(animal_name,track_id,frame_index,prediction,self._categorizer_uncertain)
+		self._pending_windows.clear()
+
+
+	def _categorize_full_recording(self,categorizer,uncertain):
 
 		if self.behavior_mode==1:
 			self.animal_kinds=[self.animal_kinds[0]]
@@ -1026,65 +1131,51 @@ class AnalyzeAnimalDetector():
 			del self.pattern_images[animal_name]
 			gc.collect()
 
-			with tf.device('CPU'):
-				if self.animation_analyzer:
-					animations=tf.convert_to_tensor(np.array(animations,dtype='float32')/255.0)
-				pattern_images=tf.convert_to_tensor(np.array(pattern_images,dtype='float32')/255.0)
+			predictions=self._predict_windows(categorizer,pattern_images,animations if self.animation_analyzer else None)
 
-			if self.animation_analyzer:
-				inputs=[animations,pattern_images]
-			else:
-				inputs=pattern_images
+			for track_id in IDs:
+				self._initialize_track_predictions(animal_name,track_id,len(self.all_time))
 
-			predictions=categorizer.predict(inputs,batch_size=32)
-
-			for behavior_name in self.all_behavior_parameters[animal_name]:
-				for i in IDs:
-					self.all_behavior_parameters[animal_name][behavior_name]['probability'][i]=[np.nan]*len(self.all_time)
-					self.event_probability[animal_name][i]=[['NA',-1]]*len(self.all_time)
-
-			idx=0
-			for n in IDs:
-				i=self.length+self.register_counts[animal_name][n]
-				idx+=i
-				while i<len(self.animal_contours[animal_name][n]):
-					if self.animal_contours[animal_name][n][i] is not None:
-						check=0
-						for c in self.animal_contours[animal_name][n][i-self.length+1:i+1]:
-							if c is None:
-								check+=1
-						if check<=self.length/2:
-							prediction=predictions[idx]
-							behavior_names=list(self.all_behavior_parameters[animal_name].keys())
-							for name_index,behavior_name in enumerate(behavior_names):
-								if len(behavior_names)==2:
-									if name_index==0:
-										probability=1-prediction[0]
-									else:
-										probability=prediction[0]
-								else:
-									probability=prediction[name_index]
-								self.all_behavior_parameters[animal_name][behavior_name]['probability'][n][i]=probability
-							if len(behavior_names)==2:
-								if prediction[0]>0.5:
-									if prediction[0]-(1-prediction[0])>uncertain:
-										self.event_probability[animal_name][n][i]=[behavior_names[1],prediction[0]]
-								if prediction[0]<0.5:
-									if (1-prediction[0])-prediction[0]>uncertain:
-										self.event_probability[animal_name][n][i]=[behavior_names[0],1-prediction[0]]
-							else:
-								if sorted(prediction)[-1]-sorted(prediction)[-2]>uncertain:
-									self.event_probability[animal_name][n][i]=[behavior_names[np.argmax(prediction)],max(prediction)]
-					idx+=1
-					i+=1
+			offset=0
+			for track_id in IDs:
+				first_frame=self.length+self.register_counts[animal_name][track_id]
+				track_length=len(self.animal_contours[animal_name][track_id])
+				for frame_index in range(first_frame,track_length):
+					if self._eligible_window(animal_name,track_id,frame_index):
+						self._assign_window_prediction(animal_name,track_id,frame_index,predictions[offset+frame_index],uncertain)
+				offset+=max(first_frame,track_length)
 
 			del predictions
 			gc.collect()
 
+
+	def categorize_behaviors(self,path_to_categorizer,uncertain=0,min_length=None):
+
+		# path_to_categorizer: path to the Categorizer
+		# uncertain: a threshold between the highest the 2nd highest probability of behaviors to determine if output an 'NA' in behavior classification
+		# min_length: the minimum length (in frames) a behavior should last, can be used to filter out the brief false positives
+
+		print('Categorizing behaviors...')
+		self.log.append('Categorizing behaviors...')
+		print(datetime.datetime.now())
+		self.log.append(str(datetime.datetime.now()))
+
+		if self._incremental_categorizer:
+			if path_to_categorizer!=self._incremental_categorizer or uncertain!=self._categorizer_uncertain:
+				raise ValueError('Categorizer and uncertainty must match the settings used during acquisition.')
+			self._consume_windows()
+			self._categorizer_model=None
+		else:
+			self._categorize_full_recording(load_model(path_to_categorizer),uncertain)
+
 		if min_length is not None:
+			IDs=list(self.event_probability[self.animal_kinds[-1]])
 			for animal_name in self.animal_kinds:
 				for n in IDs:
-					i=self.length+self.register_counts[animal_name][n]
+					registered=self.register_counts[animal_name][n]
+					if self._incremental_categorizer and registered is None:
+						continue
+					i=self.length+registered
 					continued_length=1
 					while i<len(self.event_probability[animal_name][n]):
 						if self.event_probability[animal_name][n][i][0]==self.event_probability[animal_name][n][i-1][0]:

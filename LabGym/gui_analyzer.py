@@ -1054,7 +1054,9 @@ class PanelLv2_AnalyzeBehaviors(wx.Panel):
 						AAD.prepare_analysis(self.path_to_detector,i,self.result_path,self.animal_number,self.animal_kinds,self.behavior_mode,
 							names_and_colors=self.behaviornames_and_colors,framewidth=self.framewidth,dim_tconv=self.dim_tconv,dim_conv=self.dim_conv,channel=self.channel,
 							include_bodyparts=self.include_bodyparts,std=self.std,categorize_behavior=categorize_behavior,animation_analyzer=self.animation_analyzer,
-							t=self.t,duration=self.duration,length=self.length,social_distance=self.social_distance)
+							t=self.t,duration=self.duration,length=self.length,social_distance=self.social_distance,
+							incremental_categorizer=self.path_to_categorizer if self.behavior_mode==0 and self.detector_batch==1 else None,
+							categorizer_uncertain=self.uncertain)
 						if self.behavior_mode==1:
 							AAD.acquire_information_interact_basic(batch_size=self.detector_batch,background_free=self.background_free,black_background=self.black_background)
 						else:

@@ -1347,7 +1347,9 @@ def handle_infer(args):
                     dim_tconv=cat_meta['dim_tconv'], dim_conv=cat_meta['dim_conv'], channel=cat_meta['channel'],
                     include_bodyparts=cat_meta['include_bodyparts'], std=cat_meta['std'],
                     categorize_behavior=categorize_behavior, animation_analyzer=cat_meta['animation_analyzer'],
-                    t=t_val, duration=config['duration'], length=cat_meta['length'], social_distance=cat_meta['social_distance']
+                    t=t_val, duration=config['duration'], length=cat_meta['length'], social_distance=cat_meta['social_distance'],
+                    incremental_categorizer=path_to_categorizer if behavior_mode == 0 and detector_batch == 1 else None,
+                    categorizer_uncertain=config['uncertain'],
                 )
                 if behavior_mode == 1:
                     AAD.acquire_information_interact_basic(
