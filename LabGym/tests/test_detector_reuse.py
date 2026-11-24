@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from LabGym import analyzebehavior_dt as analysis
+from LabGym import detector as detector_module
 from LabGym.detector import Detector, DetectorReuse
 
 
@@ -89,3 +90,24 @@ class DetectorReuseTest(TestCase):
             self.assertIsNot(changed_weights, different_config)
             self.assertIsNot(reuse.load(another_path, ['animal']), changed_weights)
             self.assertEqual(load.call_count, 4)
+
+    def test_device_change_reloads_detector(self):
+        with TemporaryDirectory() as directory, \
+                patch.object(Detector, 'load', autospec=True, side_effect=load_detector) as load, \
+                patch.object(detector_module.torch.cuda, 'is_available', return_value=False) as cuda_available:
+            path = write_artifact(Path(directory) / 'detector')
+            reuse = DetectorReuse()
+            first = reuse.load(path, ['animal'])
+            self.assertEqual(first.device, 'cpu')
+            self.assertEqual(load.call_args.kwargs['config'].MODEL.DEVICE, 'cpu')
+            self.assertIs(reuse.load(path, ['animal']), first)
+            self.assertEqual(load.call_count, 1)
+
+            cuda_available.return_value = True
+            second = reuse.load(path, ['animal'])
+            self.assertIsNot(second, first)
+            self.assertIsNot(second.current_detector, first.current_detector)
+            self.assertEqual(second.device, 'cuda')
+            self.assertIs(load.call_args.args[0], second)
+            self.assertEqual(load.call_args.kwargs['config'].MODEL.DEVICE, 'cuda')
+            self.assertEqual(load.call_count, 2)
